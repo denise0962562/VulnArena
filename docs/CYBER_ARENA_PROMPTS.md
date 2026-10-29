@@ -43,7 +43,7 @@
 不是重写。先读懂现有代码的约定，再动手。
 
 # 一、现状（我已确认，不要重新猜）
-仓库：<项目目录>，包名 vulnarena，Python 3.12。
+仓库：仓库根目录，包名 vulnarena，Python 3.12。
 - config.py   Settings(BaseSettings)，env_prefix="VULNARENA_"，密钥一律 SecretStr，
               有 model_validator 做跨字段校验
 - schemas.py  Pydantic v2 契约：AwareDatetime、StrEnum、ConfigDict(from_attributes=True / extra="forbid")
