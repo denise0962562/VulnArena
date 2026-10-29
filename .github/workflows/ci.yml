@@ -52,7 +52,21 @@ jobs:
       - run: python -m pip install -c requirements.lock -e '.[dev]'
       - run: ruff check .
       - run: ruff format --check .
-      - run: pytest
+      - name: Run pytest
+        run: pytest 2>&1 | tee pytest-output.log
+      - name: Surface pytest errors
+        if: failure()
+        run: |
+          # 失败时把关键行打成 annotation，公开 API 也能读到（日志本身要管理员权限）
+          grep -aE "ERROR|ImportError|ModuleNotFoundError|E   |error:|short test summary" pytest-output.log \
+            | tail -n 8 \
+            | while IFS= read -r line; do
+                line="${line//'%'/'%25'}"
+                line="${line//$'\r'/}"
+                echo "::error title=pytest::${line}"
+              done
+          echo "--- tail ---"
+          tail -n 40 pytest-output.log
       - run: python -m build
       - run: docker build -t vulnarena:ci .
       - name: Container health and non-root smoke test
