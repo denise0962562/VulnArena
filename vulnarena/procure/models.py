@@ -36,6 +36,9 @@ class DefectFlag(StrEnum):
     STATE_SKIP = "state_skip"
     PATH_TRAVERSAL = "path_traversal"
     SSRF_SUPPLIER = "ssrf_supplier"
+    PAYMENT_AMOUNT_TAMPER = "payment_amount_tamper"
+    PAYMENT_REPLAY = "payment_replay"
+    PASSWORD_RESET_IDOR = "password_reset_idor"
 
 
 class LoginIn(BaseModel):
@@ -156,3 +159,30 @@ class SupplierOut(BaseModel):
     bank_account: str
     callback_url: str
     level: str
+
+
+class PaymentIn(BaseModel):
+    po_id: int
+    amount: int
+    idempotency_key: str = ""
+
+
+class PaymentOut(BaseModel):
+    id: int
+    po_id: int
+    amount: int
+    expected_amount: int
+    receipt_no: str
+    duplicate: bool = False
+    tampered: bool = False
+
+
+class PasswordChangeIn(BaseModel):
+    old_password: str
+    new_password: str
+    user_id: int | None = None
+
+
+class PasswordChangeOut(BaseModel):
+    ok: bool
+    changed_user: str

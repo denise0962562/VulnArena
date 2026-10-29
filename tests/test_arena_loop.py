@@ -78,7 +78,13 @@ async def test_full_loop_reaches_verified(arena):
     assert "--- a/vulnarena/procure/app.py" in session.patch.diff
     assert "--- a/vulnarena/procure/app.py" in session.patch.diff
 
-    assert not any(state.flags.values())
+    # 蓝队只关掉这轮打过的类别；支付/改密三类没被覆盖，仍开着
+    still_open = {flag.value for flag, enabled in state.flags.items() if enabled}
+    assert still_open == {
+        "payment_amount_tamper",
+        "payment_replay",
+        "password_reset_idor",
+    }
     regression = session.regression
     assert regression is not None and regression.passed
     assert regression.attack_blocked == regression.attack_total == 7

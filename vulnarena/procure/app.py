@@ -35,6 +35,10 @@ from vulnarena.procure.models import (
     LoginIn,
     LoginOut,
     MissionStatus,
+    PasswordChangeIn,
+    PasswordChangeOut,
+    PaymentIn,
+    PaymentOut,
     PODetail,
     POList,
     POSummary,
@@ -661,6 +665,146 @@ async def mission(state: State, session: Session) -> MissionStatus:
         achieved=False,
         detail="还没有满足条件的单据。",
     )
+
+
+# ---------- 支付：金额与幂等 ----------
+
+
+def _payment_by_key(conn: sqlite3.Connection, key: str) -> sqlite3.Row | None:
+    return conn.execute(
+        "SELECT id, po_id, amount, receipt_no FROM payments WHERE idempotency_key = ?",
+        (key,),
+    ).fetchone()
+
+
+def _insert_payment(
+    conn: sqlite3.Connection, po_id: int, amount: int, key: str, receipt: str
+) -> int:
+    cursor = conn.execute(
+        "INSERT INTO payments (po_id, amount, idempotency_key, receipt_no, created_at)"
+        " VALUES (?, ?, ?, ?, ?)",
+        (po_id, amount, key, receipt, time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())),
+    )
+    conn.commit()
+    return int(cursor.lastrowid)
+
+
+def _payments_with_expected(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    return conn.execute(
+        "SELECT p.id, p.po_id, p.amount, p.receipt_no, o.amount AS expected"
+        " FROM payments p JOIN purchase_orders o ON o.id = p.po_id ORDER BY p.id"
+    ).fetchall()
+
+
+@router.post("/payments", response_model=PaymentOut, status_code=201)
+async def create_payment(
+    payload: PaymentIn, state: State, session: Session, defects: Defects
+) -> PaymentOut:
+    row = await state.run(_po_row, state.conn, payload.po_id)
+    if row is None:
+        raise HTTPException(404, "purchase order not found")
+
+    expected = int(row["amount"])
+    if session["role"] not in (Role.FINANCE.value, Role.CFO.value):
+        raise HTTPException(403, "payment requires the finance or cfo role")
+
+    # 幂等先于状态检查：同一个 key 重放要返回原单据，而不是 409
+    if payload.idempotency_key and not defects[DefectFlag.PAYMENT_REPLAY]:
+        existing = await state.run(_payment_by_key, state.conn, payload.idempotency_key)
+        if existing is not None:
+            return PaymentOut(
+                id=existing["id"],
+                po_id=existing["po_id"],
+                amount=existing["amount"],
+                expected_amount=expected,
+                receipt_no=existing["receipt_no"],
+                duplicate=True,
+                tampered=int(existing["amount"]) != expected,
+            )
+
+    payable = {Status.APPROVED.value}
+    if defects[DefectFlag.PAYMENT_REPLAY]:
+        payable.add(Status.PAID.value)
+    if str(row["status"]) not in payable:
+        raise HTTPException(409, f"purchase order is {row['status']}, cannot pay")
+
+    amount = int(payload.amount) if defects[DefectFlag.PAYMENT_AMOUNT_TAMPER] else expected
+    receipt = f"RCPT-{payload.po_id}-{secrets.token_hex(4)}"
+    payment_id = await state.run(
+        _insert_payment, state.conn, payload.po_id, amount, payload.idempotency_key, receipt
+    )
+    await state.run(_set_status, state.conn, payload.po_id, Status.PAID.value)
+    return PaymentOut(
+        id=payment_id,
+        po_id=payload.po_id,
+        amount=amount,
+        expected_amount=expected,
+        receipt_no=receipt,
+        duplicate=False,
+        tampered=amount != expected,
+    )
+
+
+@router.get("/payments", response_model=list[PaymentOut])
+async def list_payments(state: State, session: Session) -> list[PaymentOut]:
+    rows = await state.run(_payments_with_expected, state.conn)
+    return [
+        PaymentOut(
+            id=row["id"],
+            po_id=row["po_id"],
+            amount=row["amount"],
+            expected_amount=row["expected"],
+            receipt_no=row["receipt_no"],
+            tampered=int(row["amount"]) != int(row["expected"]),
+        )
+        for row in rows
+    ]
+
+
+# ---------- 账号：改密码 ----------
+
+
+def _user_by_name(conn: sqlite3.Connection, name: str) -> sqlite3.Row | None:
+    return conn.execute(
+        "SELECT id, name, role, password_hash FROM users WHERE name = ?", (name,)
+    ).fetchone()
+
+
+def _user_by_id(conn: sqlite3.Connection, user_id: int) -> sqlite3.Row | None:
+    return conn.execute(
+        "SELECT id, name, role, password_hash FROM users WHERE id = ?", (user_id,)
+    ).fetchone()
+
+
+def _set_password(conn: sqlite3.Connection, user_id: int, password_hash: str) -> None:
+    conn.execute("UPDATE users SET password_hash = ? WHERE id = ?", (password_hash, user_id))
+    conn.commit()
+
+
+@router.post("/account/password", response_model=PasswordChangeOut)
+async def change_password(
+    payload: PasswordChangeIn, state: State, session: Session, defects: Defects
+) -> PasswordChangeOut:
+    me = await state.run(_user_by_name, state.conn, session["sub"])
+    if me is None:
+        raise HTTPException(401, "session user no longer exists")
+
+    target_id = int(me["id"])
+    if defects[DefectFlag.PASSWORD_RESET_IDOR] and payload.user_id is not None:
+        target_id = int(payload.user_id)
+
+    target = await state.run(_user_by_id, state.conn, target_id)
+    if target is None:
+        raise HTTPException(404, "user not found")
+
+    if not defects[DefectFlag.PASSWORD_RESET_IDOR]:
+        if digest(payload.old_password, state.pepper) != target["password_hash"]:
+            raise HTTPException(403, "old password does not match")
+
+    await state.run(
+        _set_password, state.conn, target_id, digest(payload.new_password, state.pepper)
+    )
+    return PasswordChangeOut(ok=True, changed_user=target["name"])
 
 
 def build_procure_app(*, state: ProcureState | None = None) -> FastAPI:

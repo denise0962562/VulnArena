@@ -9,13 +9,32 @@
 """
 
 import html
-from urllib.parse import parse_qs
+from urllib.parse import parse_qs, quote
 
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
-from vulnarena.procure.app import approve, get_po, list_pos, login, pay, state_of, upload_attachment
-from vulnarena.procure.models import ApproveIn, AttachmentIn, DefectFlag, LoginIn, PODetail, POList
+from vulnarena.procure.app import (
+    approve,
+    change_password,
+    create_payment,
+    get_po,
+    list_pos,
+    login,
+    pay,
+    state_of,
+    upload_attachment,
+)
+from vulnarena.procure.models import (
+    ApproveIn,
+    AttachmentIn,
+    DefectFlag,
+    LoginIn,
+    PasswordChangeIn,
+    PaymentIn,
+    PODetail,
+    POList,
+)
 
 router = APIRouter(prefix="/ui", include_in_schema=False)
 COOKIE = "procure_session"
@@ -209,7 +228,8 @@ def orders_detail(detail: PODetail, claims: dict) -> str:
         actions += f"""
 <form method="post" action="/ui/pos/{detail.id}/pay" class="inline" style="margin-left:8px">
   <button type="submit" class="ghost">执行付款</button>
-</form>"""
+</form>
+<a class="btn" href="/ui/pay/{detail.id}" style="margin-left:8px">支付（金额可改）</a>"""
     return f"""
 <div class="card">
   <div class="row" style="justify-content:space-between">
@@ -249,7 +269,7 @@ async def ui_pos_detail(request: Request, po_id: int) -> HTMLResponse:
         <p><a href="/ui/pos">返回列表</a></p></div>"""
         who = f"{escape(claims['sub'])} · {escape(claims['role'])}"
         return page(f"单据 #{po_id} · 采购审批", body, who, status=status)
-    who = f"{escape(claims['sub'])} · {escape(claims['role'])} · <a href='/ui/pos'>列表</a> · <a href='/ui/logout'>退出</a>"
+    who = f"{escape(claims['sub'])} · {escape(claims['role'])} · <a href='/ui/pos'>列表</a> · <a href='/ui/account'>账号</a> · <a href='/ui/logout'>退出</a>"
     return page(f"单据 #{po_id} · 采购审批", orders_detail(detail, claims), who)
 
 
@@ -301,7 +321,7 @@ async def ui_supplier(request: Request, supplier_id: int) -> HTMLResponse:
             (supplier_id,),
         ).fetchone()
     )
-    who = f"{escape(claims['sub'])} · {escape(claims['role'])} · <a href='/ui/pos'>列表</a>"
+    who = f"{escape(claims['sub'])} · {escape(claims['role'])} · <a href='/ui/pos'>列表</a> · <a href='/ui/account'>账号</a>"
     if row is None:
         return page(
             "供应商 · 采购审批",
@@ -362,3 +382,103 @@ async def ui_upload(request: Request) -> RedirectResponse:
     except Exception:
         pass
     return RedirectResponse("/ui/pos", status_code=303)
+
+
+@router.get("/pay/{po_id}", response_class=HTMLResponse)
+async def ui_pay_form(request: Request, po_id: int, err: str = "") -> HTMLResponse:
+    claims = identity(request)
+    if claims is None:
+        return RedirectResponse("/ui/login", status_code=303)
+    state = state_of(request)
+    try:
+        detail = await get_po(po_id, state, claims, dict(state.flags))
+    except Exception:
+        return page(
+            "支付 · 采购审批", '<div class="card"><p class="err">单据不存在</p></div>', status=404
+        )
+    error = f'<p class="err">{escape(err)}</p>' if err else ""
+    body = f"""
+<div class="card">
+  <h3 style="margin-top:0">支付单据 #{detail.id}</h3>
+  <p class="muted">应付金额：{detail.amount} 分（约 {detail.amount // 100} 元）</p>
+  {error}
+  <form method="post" action="/ui/pay/{detail.id}">
+    <label>实付金额（分）<input name="amount" value="{detail.amount}" autocomplete="off"></label>
+    <label>幂等键（可空）<input name="idempotency_key" value="" autocomplete="off"></label>
+    <button type="submit">提交支付</button>
+  </form>
+  <p class="muted" style="margin-top:10px">这个表单把金额交给服务端——服务端该不该信它，就是这一关的问题。</p>
+</div>"""
+    return page(
+        "支付 · 采购审批",
+        body,
+        f"{escape(claims['sub'])} · {escape(claims['role'])} · <a href='/ui/pos'>列表</a> · <a href='/ui/account'>账号</a>",
+    )
+
+
+@router.post("/pay/{po_id}")
+async def ui_pay_submit(request: Request, po_id: int) -> RedirectResponse:
+    claims = identity(request)
+    if claims is None:
+        return RedirectResponse("/ui/login", status_code=303)
+    state = state_of(request)
+    form = await parse_form(request)
+    try:
+        payload = PaymentIn(
+            po_id=po_id,
+            amount=int(form.get("amount") or 0),
+            idempotency_key=str(form.get("idempotency_key") or ""),
+        )
+        await create_payment(payload, state, claims, dict(state.flags))
+    except Exception as exc:  # noqa: BLE001 - 页面只需要把失败原因显示出来
+        reason = str(getattr(exc, "detail", exc))
+        return RedirectResponse(f"/ui/pay/{po_id}?err={quote(reason)}", status_code=303)
+    return RedirectResponse(f"/ui/pos/{po_id}", status_code=303)
+
+
+@router.get("/account", response_class=HTMLResponse)
+async def ui_account(request: Request, msg: str = "") -> HTMLResponse:
+    claims = identity(request)
+    if claims is None:
+        return RedirectResponse("/ui/login", status_code=303)
+    flash = f'<p class="ok">{escape(msg)}</p>' if msg else ""
+    body = f"""
+<div class="card">
+  <h3 style="margin-top:0">修改密码</h3>
+  {flash}
+  <form method="post" action="/ui/account">
+    <label>用户 ID（不改请留空）<input name="user_id" value="" autocomplete="off"></label>
+    <label>旧密码<input name="old_password" type="password" value=""></label>
+    <label>新密码<input name="new_password" type="password" value=""></label>
+    <button type="submit">提交</button>
+  </form>
+  <p class="muted" style="margin-top:10px">正常实现只该改自己，并且必须验旧密码。</p>
+</div>"""
+    return page(
+        "账号 · 采购审批",
+        body,
+        f"{escape(claims['sub'])} · {escape(claims['role'])} · <a href='/ui/pos'>列表</a> · <a href='/ui/account'>账号</a>",
+    )
+
+
+@router.post("/account")
+async def ui_account_submit(request: Request) -> RedirectResponse:
+    claims = identity(request)
+    if claims is None:
+        return RedirectResponse("/ui/login", status_code=303)
+    state = state_of(request)
+    form = await parse_form(request)
+    raw = str(form.get("user_id") or "").strip()
+    try:
+        payload = PasswordChangeIn(
+            old_password=str(form.get("old_password") or ""),
+            new_password=str(form.get("new_password") or ""),
+            user_id=int(raw) if raw else None,
+        )
+        result = await change_password(payload, state, claims, dict(state.flags))
+    except Exception as exc:  # noqa: BLE001
+        reason = str(getattr(exc, "detail", exc))
+        return RedirectResponse(f"/ui/account?msg={quote(reason)}", status_code=303)
+    return RedirectResponse(
+        f"/ui/account?msg={quote('已修改 ' + result.changed_user)}", status_code=303
+    )

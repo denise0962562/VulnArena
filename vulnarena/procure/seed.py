@@ -58,6 +58,14 @@ CREATE TABLE audit (
     path TEXT NOT NULL,
     status INTEGER NOT NULL
 );
+CREATE TABLE payments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    po_id INTEGER NOT NULL,
+    amount INTEGER NOT NULL,
+    idempotency_key TEXT NOT NULL DEFAULT '',
+    receipt_no TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
 """
 
 USERS = [
