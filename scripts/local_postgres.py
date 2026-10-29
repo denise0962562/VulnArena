@@ -32,7 +32,7 @@ def configure_paths() -> None:
     if not str(ROOT).isascii():
         # EDB tools on Windows can misinterpret non-ASCII paths during UTF-8 initdb.
         # A directory junction keeps the actual files in the workspace.
-        parent = Path(ROOT.anchor) / "VulnArenaRuntime"
+        parent = Path(ROOT.anchor) / "VulnScopeRuntime"
         parent.mkdir(exist_ok=True)
         RUNTIME = parent / hashlib.sha256(str(ROOT).encode()).hexdigest()[:12]
         if not str(RUNTIME).isascii():
@@ -116,8 +116,8 @@ async def create_databases(credentials: dict[str, str]) -> None:
     )
     try:
         for role, password_key in (
-            ("vulnarena", "app_password"),
-            ("vulnarena_test", "test_password"),
+            ("vulnscope", "app_password"),
+            ("vulnscope_test", "test_password"),
         ):
             exists = await connection.fetchval("SELECT 1 FROM pg_roles WHERE rolname=$1", role)
             password_literal = await connection.fetchval(
@@ -159,10 +159,10 @@ def configure_env(credentials: dict[str, str]) -> None:
         else (ROOT / ".env.example").read_text(encoding="utf-8")
     )
     updates = {
-        "VULNARENA_DATABASE_URL": database_url("vulnarena", credentials["app_password"]),
+        "VULNARENA_DATABASE_URL": database_url("vulnscope", credentials["app_password"]),
         "POSTGRES_PASSWORD": credentials["app_password"],
         "POSTGRES_ADMIN_PASSWORD": credentials["admin_password"],
-        "TEST_DATABASE_URL": database_url("vulnarena_test", credentials["test_password"]),
+        "TEST_DATABASE_URL": database_url("vulnscope_test", credentials["test_password"]),
     }
     lines = []
     for line in content.splitlines():
@@ -220,7 +220,7 @@ def setup() -> None:
 
 
 def shell(*, test: bool = False) -> None:
-    user = "vulnarena_test" if test else "vulnarena"
+    user = "vulnscope_test" if test else "vulnscope"
     credentials = json.loads(CREDENTIALS.read_text(encoding="utf-8"))
     key = "test_password" if test else "app_password"
     environment = dict(os.environ, PGPASSWORD=credentials[key])
@@ -235,7 +235,7 @@ def backup() -> None:
     credentials = json.loads(CREDENTIALS.read_text(encoding="utf-8"))
     directory = ROOT / "data/backups"
     directory.mkdir(exist_ok=True)
-    path = directory / ("vulnarena-" + datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ") + ".dump")
+    path = directory / ("vulnscope-" + datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ") + ".dump")
     subprocess.run(
         [
             str(BIN / "pg_dump.exe"),
@@ -244,9 +244,9 @@ def backup() -> None:
             "-p",
             "5432",
             "-U",
-            "vulnarena",
+            "vulnscope",
             "-d",
-            "vulnarena",
+            "vulnscope",
             "--format=custom",
             "--file=" + str(path),
         ],

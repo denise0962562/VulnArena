@@ -127,7 +127,7 @@ Windows 使用 `scripts/postgres.cmd setup/start/stop/status/shell/backup/test` 
 `setup` 首次下载约 385 MB 的 [EDB Windows 二进制包](https://www.enterprisedb.com/download-postgresql-binaries)，
 生成随机密码和独立 `vulnarena_test` 测试库。程序位于 `.tools/postgresql`，数据位于
 `data/postgresql`，只监听 `127.0.0.1:5432`，采用 SCRAM 认证。本机应用和测试角色均非超级用户。
-`start` 在后台启动，不随终端关闭；`stop` 明确停止。中文目录通过 `E:\VulnArenaRuntime\`
+`start` 在后台启动，不随终端关闭；`stop` 明确停止。中文目录通过 `E:\VulnScopeRuntime\`
 下的英文目录联接访问，实际文件仍在项目中。`shell` 打开 psql，`backup` 生成 pg_dump 自定义格式备份。
 
 从旧 SQLite 一次性导入（先停止旧后端）：
