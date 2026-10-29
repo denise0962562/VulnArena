@@ -1,0 +1,94 @@
+# 【P1 · M0 企业门户靶场】P0 之后发；产出 vulnarena/portal/ 与 tests/test_portal.py，不涉及 AI。
+
+【里程碑 M0】实现企业内部门户靶场，不涉及 AI、不涉及 WAF。做完必须能 curl 通、测试全绿。
+
+# 目标
+新建包 vulnarena/portal/，挂载为子应用 /api/portal/*，是一套"看起来很正经"的企业内部系统：
+员工登录、工单检索、报表导出、Webhook 连通性测试。
+它同时内置 5 个"可开关的脆弱点"，但：每个脆弱点都必须能在"可被利用"和"已修复"两种状态间切换，
+且两种状态的所有业务逻辑都能跑通。
+
+# 目录（可按职责合并，但单文件不超过 250 行）
+vulnarena/portal/__init__.py     导出 build_portal_app
+vulnarena/portal/state.py        PortalState：sqlite 连接、虚拟文件系统、canary、开关字典
+vulnarena/portal/seed.py         确定性种子数据（固定随机种子）
+vulnarena/portal/auth.py         HMAC 签名 token（issue / verify / jti）
+vulnarena/portal/routes.py       4 个业务路由
+
+# 接口契约（响应一律 Pydantic 模型，禁止裸 dict）
+POST /api/portal/login
+  body: {"username": str, "password": str}
+  200: {"token": str, "role": "employee"|"exec", "tenant_id": str, "expires_in": int}
+  401: {"detail": "invalid credentials"}
+
+GET /api/portal/tickets?q=&page=1&page_size=10        Authorization: Bearer <token>
+  200: {"total": int, "page": int, "page_size": int, "items": [{id, title, status, created_at}]}
+  只返回本租户、且本人可见的工单；响应体中不得出现 canary
+
+GET /api/portal/tickets/{ticket_id}
+  200: {"id": int, "title": str, "body": str, "owner_id": str, "visibility": "normal"|"exec"}
+  404 / 403 按权限语义返回
+
+GET /api/portal/exports?name=<报表文件名>
+  200: text/csv（Content-Disposition 带上文件名）
+  404: 文件不存在
+
+POST /api/portal/webhooks/test
+  body: {"target_url": str}
+  200: {"status": int, "elapsed_ms": int, "preview": str[:200]}
+
+# 数据（seed，固定种子，每次启动完全一致）
+- 3 个用户：alice(employee, tenant=T1) / bob(employee, T1) / admin(exec, T1)，密码只在内存里哈希比对
+- 12 条工单，其中 2 条 visibility="exec"、owner_id="admin"，body 内含 canary_flag
+- 隐藏表 flag_vault(secret TEXT)，只应被 UNION 注入读到
+- 虚拟文件系统 dict：/etc/portal/secret_key（含 canary）、3 个正常报表 CSV
+- 模拟元数据服务：一个独立的内存 ASGI app，GET /latest/meta-data/iam/security-credentials/
+  返回含 canary 的 JSON（详见下方"SSRF 红线"）
+
+# 五个脆弱开关（dict[VulnSwitch, bool] + dict[VulnSwitch, bool] patched）
+STR 枚举命名：
+  SQLI_LOGIN_BYPASS    登录处拼接 SQL        | 修复：参数化绑定
+  SQLI_UNION_SEARCH    搜索处拼接 LIKE       | 修复：参数化 + LIKE 转义 + ESCAPE
+  IDOR_TICKET_DETAIL   详情不校验 owner      | 修复：WHERE owner_id = ?
+  PATH_TRAVERSAL       导出未过滤 ../        | 修复：Path(name).name + 白名单
+  SSRF_INTERNAL_PROBE  未校验 host 即发包    | 修复：scheme/host 白名单 + 拒绝 169.254/内网段
+
+两种状态的行为差异必须写进 docstring，例如：
+  脆弱：  f"SELECT ... FROM tickets WHERE title LIKE '%{q}%'"
+  修复：  "SELECT ... FROM tickets WHERE title LIKE ? ESCAPE '\\'"，参数 (f"%{escaped}%",)
+"脆弱"分支只允许拼接进内存 SQLite 的 SQL 字符串，禁止任何 shell / 文件 / 反序列化路径。
+
+# 实现红线
+1. SQLite 用 sqlite3.connect(":memory:")，但：
+   - 一个 PortalState 持有一个连接，跨请求共享；所有查询用 asyncio.to_thread + 单把 asyncio.Lock 串行化；
+   - 禁止在 async 函数里直接同步调用 sqlite3（会阻塞事件循环）；
+   - 建表与 seed 在构造函数里一次完成。
+2. 路径穿越只针对虚拟文件系统 dict，禁止 import os 后真的 open()。
+3. SSRF 出网口必须焊死：portal 内部只有一个 httpx.AsyncClient，
+   transport 固定为 ASGITransport(app=metadata_app)，base_url 固定为 http://169.254.169.254；
+   调用前校验 target_url 只能是这个 base 下的路径，其余一律拒绝并记录。
+   绝不允许把用户传入的 URL 直接交给 httpx 或任何 DNS 解析。
+4. token：HMAC-SHA256(secret, payload)，payload 含 sub/role/tenant/jti/exp；
+   exp 15 分钟；校验失败统一 401，不区分"过期"和"伪造"。
+5. 每次请求的敏感响应必须能自证：命中脆弱点才带 canary，修复态不带。
+
+# 依赖注入
+main.py 的 create_app 增加关键字参数 portal=None；为 None 时按 settings 构建；
+测试里传自定义 portal 子应用，挂载位置必须在 StaticFiles mount 之前。
+
+# 测试（tests/test_portal.py，必须离线可跑）
+1. 正常登录 → 拿 token → 查自己的工单 → 200 且响应不含 canary
+2. 错误密码 → 401
+3. SQLI_LOGIN_BYPASS 开：' OR '1'='1 拿到 exec token；关：401
+4. SQLI_UNION_SEARCH 开：UNION 读到 flag_vault 的 canary；关：查不到 / 语法错误被捕获为 400
+   （关的时候不允许抛未捕获的 sqlite3.OperationalError）
+5. IDOR 开：bob 读 admin 的 exec 工单 200 + canary；关：403
+6. PATH_TRAVERSAL 开：name=../../etc/portal/secret_key 读到 canary；关：400/404
+7. SSRF 开：target_url 指向元数据端点拿到含 canary 的 JSON；关：403
+8. 五个开关全关时，上述 4 条正常业务流全部 200（防止修复态把业务打死）
+
+# 验收
+.\.venv\Scripts\python -m ruff check .
+.\.venv\Scripts\python -m ruff format --check .
+.\.venv\Scripts\python -m pytest tests/test_portal.py -q
+跑完给我 curl 示例，我要能手动复现上面每一条。

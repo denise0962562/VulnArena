@@ -1,0 +1,9 @@
+include README.md VALIDATION.md 使用指南.md requirements.lock .env.example Dockerfile compose.yaml .dockerignore .gitignore
+recursive-include tests *.py
+recursive-include tests/fixtures *.json *.md
+recursive-include scripts *.py *.ps1 *.cmd
+recursive-include docker *.sh
+include .github/workflows/ci.yml
+recursive-include frontend *.json *.js *.vue *.css *.html *.svg
+include frontend/.prettierignore frontend/.prettierrc.json
+prune frontend/node_modules

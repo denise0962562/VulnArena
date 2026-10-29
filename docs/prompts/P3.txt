@@ -1,0 +1,83 @@
+# 【P3 · M2 DeepSeek 三 Agent】P2 的离线闭环全绿后再发；失败必须降级。
+
+【里程碑 M2】把 M1 的确定性攻击/防守替换成 DeepSeek 驱动的三个 Agent。
+硬要求：任何失败都必须降级回 M1 的确定性路径，报告里标明 agent_mode = "llm" | "fallback"。
+整个测试套件在无 API Key 环境下必须 100% 通过。
+
+# 新增配置（config.py）
+deepseek_api_key: SecretStr = SecretStr("")
+deepseek_base_url: str = "https://api.deepseek.com"
+deepseek_model: str = "deepseek-chat"
+arena_timeout: float = Field(default=180.0, gt=10.0, le=600.0)
+arena_max_llm_calls: int = Field(default=12, ge=0, le=50)
+arena_max_turns: int = Field(default=3, ge=1, le=4)
+arena_token_budget: int = Field(default=60000, ge=1000)
+在 model_validator 里加：若配置了 key，则 base_url 必须 https。
+（注意现有 validator 已校验 nvd_interval / task_ttl / database_url，别破坏它们）
+
+# 1. DeepSeekClient（vulnarena/arena/deepseek.py）
+- 参考 nvd.py 的写法：构造函数接收 settings + transport + sleep，重试 429/5xx，
+  指数退避 1/2/4s，解析 Retry-After 且 >120s 直接失败，不重试 4xx
+- 请求体：{"model":…, "messages":[…], "response_format":{"type":"json_object"},
+          "temperature":0.2, "max_tokens":…}
+  注意：json_object 模式要求提示词里必须出现 "json" 字样，否则 API 直接报错——
+  三个 agent 的 system prompt 里都必须显式写"只输出 json"
+- 解析：先 json.loads，再 Model.model_validate；
+  校验失败时把 pydantic 的 errors() 摘要回喂给模型，允许重试 1 次；
+  二次失败抛 AgentContractError，由上层降级
+- 记账：每次调用记录 prompt_tokens / completion_tokens / 耗时 / stage，
+  累计超过 arena_max_llm_calls 或 arena_token_budget 立即停止调用并降级
+- 禁止把 API Key 写进日志、异常信息或报告
+
+# 2. 三个 Agent 的契约（schemas 放 agents.py，Pydantic v2，extra="forbid"）
+ScenarioArchitect：
+  输入：可选 cve_id + 真实 CVE 描述（从 db.get 拿，没有就只用类别）
+  输出 ArenaBlueprint{business_scene, category: VulnCategory, param_schema: dict,
+                     baseline: dict, initial_blacklist: list[str], canary: str, difficulty: Literal["easy","medium","hard"]}
+  约束：只允许在 M0 已有的 5 个脆弱点上做组合，不得发明新路由；initial_blacklist 由模型生成但必须过 gate 的"召回"检查
+
+SecurityProber：
+  输入：目标接口清单（method/path/参数名/正常值）+ 上一轮 trace 摘要（去掉 canary 明文，用 CANARY_HIT 代替）
+  输出 ProbeTurn{reasoning: str, request: HttpSpec, verdict: Literal["blocked","breach","normal","need_more"]}
+  HttpSpec{method, path, query: dict[str,str], body: dict|None, headers: dict[str,str]}
+  约束：path 必须在 /api/portal/* 白名单内，method 只能是 GET/POST；
+        生成后由代码侧校验，越界直接拒绝并记一条 violation（这本身是很好的评测数据）
+
+BlueDefender：
+  输入：四条 trace + 命中的规则 + 当前 policy
+  输出 DefensePatch{rule: WafRuleSpec|None, fix: FixKind, rationale: str, confidence: float}
+  WafRuleSpec{regex, targets}
+  FixKind 是枚举（PARAMETERIZED_SQL / OWNER_CHECK / PATH_WHITELIST / SSRF_ALLOWLIST），
+  只是一个"选哪个修复模板"的开关——diff 由模板渲染，不让模型自由写代码。
+  —— 这条很关键：模型输出的正则必须过 gate，模型选的修复必须是我们预置的真实代码。
+
+# 3. 编排（orchestrator.py）
+ArenaStatus 枚举：CREATED → BLUEPRINT_READY → PROBING → BREACH_CONFIRMED | BREACH_FAILED
+                  → PATCHING → VERIFYING → VERIFIED | REGRESSION_FAILED
+每推进一步：更新 Redis 里的 ArenaSession（vulnarena:arena:session:{id}，EX 1h），
+并把该步的 ProbeTrace / DefensePatch 追加进去。前端靠 1s 轮询。
+租约：复用 state.py 的 Lua 模式，但键换成 vulnarena:arena:lock，且按 session_id 分锁（允许并发多场演练）。
+心跳：照抄 SyncService 的 heartbeat 模式，续租失败即取消并标记 INTERRUPTED。
+
+# 4. 降级矩阵（必须实现）
+- 无 key → 全程 fallback（M1 的确定性实现），agent_mode="fallback"
+- 首次调用即 401/403 → 立刻 fallback，并记 error_code（不要重试烧钱）
+- 连续 2 次 JSON 校验失败 → fallback
+- 预算耗尽 → 在当前位置 fallback 继续，不中断整场演练
+- Stage 3 的规则被 gate 打回 2 次 → 用模板规则兜底，source="template"
+任何 fallback 都要在最终报告的 warnings 里写清原因，禁止静默。
+
+# 5. 测试（tests/test_arena_agents.py，全部用 httpx.MockTransport）
+1. 正常 JSON → ArenaBlueprint 解析成功
+2. 缺字段 JSON → 触发一次修复重试 → 第二次正常 → 成功（断言共 2 次请求）
+3. 连续畸形 JSON → 抛 AgentContractError → 编排降级到 fallback 且最终 VERIFIED
+4. 429 响应 → 按 1/2/4s 退避重试（用 mock clock 断言等待序列，参考 test_nvd.py 的 Clock）
+5. 返回 500 三次 → 抛上游错误 → 降级
+6. 无 key → 断言一次 HTTP 调用都没发生（mock 计数 == 0），闭环仍然跑完
+7. prober 返回 path=/admin → 被代码侧拒绝，记 violation，不产生实际请求
+8. 预算耗尽 → 后续不再调用模型，但演练走完全程
+
+# 验收
+.\.venv\Scripts\python -m pytest tests/ -q          # 无 key 环境必须全绿
+然后我在 .env 里填 VULNARENA_DEEPSEEK_API_KEY 后，用一条命令跑真实演练并打印：
+每阶段的耗时、模型调用次数、token 消耗、最终拦截率与误杀率。

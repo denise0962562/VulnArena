@@ -1,0 +1,110 @@
+# 【P2 · M1 WAF 与确定性攻击链】P1 验收通过后再发；本块禁止接任何大模型。
+
+【里程碑 M1】在 M0 之上加三层：可热更新的 WAF 中间件、规则准入闸门、确定性四步攻击链。
+本里程碑禁止调用任何大模型——先让闭环在离线环境下 100% 稳定跑通，AI 是下一阶段的事。
+
+# 目录
+vulnarena/arena/__init__.py
+vulnarena/arena/policy.py      WafPolicy / WafRule 模型 + PolicyStore（Redis + 进程内缓存）
+vulnarena/arena/gate.py        verify_rule：规则准入闸门
+vulnarena/arena/corpus.py      attack_corpus / benign_corpus 两组样本
+vulnarena/arena/middleware.py  WafMiddleware
+vulnarena/arena/attacker.py    DeterministicAttacker：四步攻击链
+vulnarena/arena/defender.py    TemplateDefender：从 trace 生成规则与修复 diff
+vulnarena/arena/replay.py      回归重放与双向断言
+
+# 1. 数据模型（schemas 放 policy.py，不进全局 schemas.py）
+class WafRule(BaseModel):
+    id: str                      # "R-<8 hex>"
+    regex: str
+    targets: set[Literal["query","path","body","header"]]
+    rationale: str               # 一句话，给战报用
+    source: Literal["llm","template","manual"]
+    created_at: AwareDatetime
+
+class WafPolicy(BaseModel):
+    session_id: str
+    version: int                 # Redis INCR，单调递增
+    blocked_patterns: list[WafRule] = []
+    revoked_tokens: list[str] = []      # 存 jti，精确匹配，不许用正则
+    patch_switches: dict[str, bool] = {}  # 5 个开关的"代码级修复态"
+    max_body_bytes: int = 65536
+
+# 2. PolicyStore
+- Redis 键：vulnarena:arena:policy:{session_id}（整份 JSON，EX 1h）
+- 进程内缓存：{session_id: (policy, monotonic_ts)}，TTL 1.0s；
+  命中直接返回，未命中才读 Redis。Redis 挂了必须降级为"最近一次快照"，
+  绝不允许 500 或者让靶场整体不可用（可以放行 + 记 warning，但要在响应头 X-Waf-Degraded: 1 标出来）。
+- 与 state.py 的 TaskStore 完全隔离：不得复用 vulnarena:sync:active 这个键。
+
+# 3. WafMiddleware（挂在 portal 子应用上，不进 create_app 全局中间件）
+处理顺序固定为：
+  a. 取 X-Arena-Session 头；缺失 → 400 {"detail":"arena session required"}
+  b. 取 policy 快照（走 1s 缓存）
+  c. body 超过 max_body_bytes → 413
+  d. token 吊销检查：解出 jti，命中 revoked_tokens → 403 {"detail":"token revoked","code":"TOKEN_REVOKED"}
+  e. 构造检测用的规范化载荷：
+     raw = path + "?" + query + "|" + body 原文
+     norm = 二次 URL 解码 → 去 SQL 注释符 → 折叠连续空白 → 小写
+     注意：正则同时跑 raw 和 norm，任一命中即拦截（防编码绕过），
+     但闸门会保证规则不误伤 benign_corpus，两者必须同时成立。
+  f. 逐条 regex.search(targets 范围内的串)；命中 → 403
+     {"detail":"blocked by waf","rule_id": rule.id}
+  g. 无论放行还是拦截，都往 Redis list vulnarena:arena:events:{session_id} 追加一条 WafEvent
+     {ts, path, method, decision, rule_id, payload_preview[:200], client_jti}，LPUSH + LTRIM 200
+     —— 这是 Stage 3 蓝队审计的输入，必须是真实抓包，不许事后编造。
+
+# 4. 规则准入闸门 gate.verify_rule(rule) -> GateResult（本项目最核心的一段代码）
+五项检查，全部通过才允许写进 Redis：
+  1. 可编译：re.compile 不抛异常
+  2. 长度：len(regex) <= 300
+  3. 反回溯：拒绝嵌套量词形态（如 (a+)+ / (.*)* / (a|a)*），
+     并对每个样本在 4KB 输入上跑 re.search，用 asyncio.wait_for(asyncio.to_thread(...), 0.05) 限时
+  4. 召回：必须命中 attack_corpus 里该漏洞类别的全部样本（>=3 条）
+  5. 误杀：必须不命中 benign_corpus 的任意一条（>=12 条）
+返回 GateResult{passed: bool, failed: list[str], recall: float, false_positive: float}
+
+# 5. 语料（corpus.py，硬编码，必须含这些坑）
+attack_corpus 每类 >= 3 条，覆盖：单引号闭合、UNION SELECT、注释截断 (-- / #)、大小写混写、
+  双重 URL 编码、内联注释 /*!*/、../ 与 ..\ 与 URL 编码的 %2e%2e%2f、169.254.169.254 的十进制/十六进制写法
+benign_corpus 12 条，必须包含这些"看起来像攻击"的合法值：
+  O'Brien 的工单标题、字段名 "ticket's status"、搜索词 "100%"、"a+b"、文件名 report-2026Q3.csv、
+  正常 URL 里带 & 和中文、备注里写 "1=1 这个公式"、正文里的 "select" 英文单词（作为普通名词）
+  —— 这些是面试时最有说服力的部分：证明规则不是靠"看到 select 就拦"。
+
+# 6. 确定性攻击链（attacker.py）
+四步固定剧本，每步都返回 ProbeTrace（请求摘要、状态码、耗时 ms、命中规则、是否拿到 canary、一句话 reasoning）：
+  Step 1 探测：GET /api/portal/tickets?q=test → 200，确认接口存在
+  Step 2 朴素攻击：q=' UNION SELECT secret FROM flag_vault-- → 被初始规则 403（记录 rule_id）
+  Step 3 变形绕过：同一语义，换大小写 + 内联注释 + 二次编码 → 200 且响应含 canary → BREACH_CONFIRMED
+  Step 4 横向：用 bob 的 token 遍历 ticket_id 读到 admin 的 exec 工单 → 200 + canary
+若 Step 3 在 3 次变形内仍未成功，返回 BREACH_FAILED 并在报告里如实记录（不许伪造成功）。
+
+# 7. 模板蓝队（defender.py）
+输入：四条 trace + 当前 policy。输出 DefensePatch：
+  - waf_rule：从漏洞类别选模板（如 SQLi → 匹配 UNION\s+SELECT 与单引号闭合的组合；
+    IDOR → 匹配连续数字 id 的异常枚举），交给 gate.verify_rule 校验；
+    不通过则缩窄规则重试一次，仍不过就用"该路径 + 该参数名"的保守白名单规则兜底，并把 source 标成 template
+  - patch_switches：把对应开关的修复态置 True
+  - diff：用 difflib.unified_diff 渲染"脆弱实现 → 修复实现"的真实两段代码
+    （两段代码从 templates/ 里取，是真实能跑的 Python，不是伪代码）
+  - rationale：一句话说明"为什么这条规则既拦得住又不误杀"
+
+# 8. 回归（replay.py）
+- 重放 Step 2/3/4 的原始请求 → 断言全部 403（任何一条 200 即 REGRESSION_FAILED，并指出哪条漏了）
+- 重放 benign_corpus 12 条 → 断言全部 200 且响应体不含 canary、不触发 X-Waf-Degraded
+- 输出结构化的 RegressionResult{blocked: n, allowed: n, missed: [...], false_positives: [...]}
+
+# 测试（tests/test_arena_policy.py / test_arena_loop.py）
+1. verify_rule 拒绝：(a+)+ 回溯型、超长正则、召回不足、误杀 benign 的"select"规则
+2. verify_rule 通过：一条精确规则，断言 recall==1.0 且 false_positive==0.0
+3. 中间件：无 X-Arena-Session → 400；吊销 token → 403；正常请求放行
+4. policy 进程内缓存：连发两次，第二次不得再访问 Redis（用 mock 计数断言）
+5. Redis 故障 → 请求仍能完成，且响应头带 X-Waf-Degraded
+6. 四步链端到端：Step2 403、Step3 200+canary、Step4 200+canary
+7. 完整闭环：attack → patch → replay，断言 blocked==3 且 false_positives==0
+8. 失败路径：把 Step 3 的变形全部改成无害 payload，断言结果是 BREACH_FAILED 而不是崩
+
+# 验收
+.\.venv\Scripts\python -m pytest tests/test_arena_policy.py tests/test_arena_loop.py -q
+并给出一条命令，让我能本地跑完整闭环并打印时间线（scripts/arena_demo.py）。

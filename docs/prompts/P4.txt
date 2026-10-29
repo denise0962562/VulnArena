@@ -1,0 +1,44 @@
+# 【P4 · M3 包装与求职材料】P3 跑通真实演练后再发。
+
+【里程碑 M3】把已跑通的系统变成"面试官 30 秒能看懂"的材料。不新增业务逻辑。
+
+# 1. 战报归档
+db.py 新增 ArenaReport(Base)，表名 arena_reports：
+  id(str, pk) / created_at(UTCDateTime) / category(str, index) / agent_mode(str) /
+  status(str, index) / duration_ms(int) / llm_calls(int) / prompt_tokens(int) / completion_tokens(int) /
+  blueprint(JSONB) / traces(JSONB) / patch(JSONB) / regression(JSONB) / warnings(JSONB)
+沿用现有 Database 的风格提供 list_reports(page, page_size) 与 get_report(id)。
+
+# 2. 路由（main.py 挂载，必须在 StaticFiles 之前）
+POST /api/arena/start        202 → ArenaSession（创建租约 + BackgroundTasks）
+GET  /api/arena/sessions/{id}   实时状态
+GET  /api/arena/sessions/{id}/stream   SSE，事件：stage / trace / patch / done
+GET  /api/arena/reports?page=&page_size=
+所有 /api/arena/* 必须校验 X-Arena-Admin 头（值从 settings 读，默认随机生成并在启动日志打印），
+未授权一律 401。控制面不许裸奔。
+
+# 3. 单页看板
+vulnarena/web/arena.html，原生 JS + 一个 <pre> 时间线 + 三个数字卡（拦截率 / 误杀率 / 累计成本），
+不许引入 npm 构建流程。SSE 连不上时自动降级成 1s 轮询。
+
+# 4. scripts/arena_demo.py
+一条命令跑完整闭环，终端输出带时间戳的四阶段时间线，结束时打印一张 before/after 表：
+| 向量 | 打补丁前 | 打补丁后 |
+| UNION 注入 | 200 + canary | 403 (R-a1b2c3d4) |
+| IDOR 遍历 | 200 + canary | 403 |
+| O'Brien 正常查询 | 200 | 200 ✅ 未误杀 |
+
+# 5. README 新增章节（中文，控制在 120 行内）
+## AI Cyber Arena
+- 一段话：它是什么、为什么这么设计（LLM 提议 / 确定性裁决）
+- mermaid 架构图（浏览器 → WAF 中间件 → portal → 内存沙盒；arena 编排器 ↔ Redis ↔ PostgreSQL）
+- 快速开始（三条命令）
+- 实测数据表：拦截率、误杀率、p50/p95 延迟、单场 token 成本
+- 威胁模型与边界：只打自己的内存沙盒、不接外部目标、控制面鉴权、canary 机制
+- 已知限制与失败模式：LLM 不可用时的降级、规则被 gate 打回的比例、并发演练的隔离级别
+- 设计取舍一节：为什么不让模型直接生成生产正则（给出你自己测到的误杀数据）
+
+# 6. 一篇博客大纲（docs/blog.md，只写大纲 + 结论，别写成教程）
+标题方向：《我让 LLM 写 WAF 规则，然后写了个闸门把它拦下来》
+结构：动机 → 朴素做法为什么会炸（附误杀样本）→ proposal/verify/activate 三段式 →
+     实测数字 → 这套东西不能解决什么

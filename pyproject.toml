@@ -1,0 +1,53 @@
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vulnarena"
+version = "0.1.0"
+description = "A small, testable NVD learning project"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+  "fastapi>=0.115,<1", "uvicorn>=0.34,<1", "httpx>=0.28,<1",
+  "pydantic>=2.10,<3", "pydantic-settings>=2.7,<3",
+  "sqlalchemy[asyncio]>=2.0.38,<2.1", "asyncpg>=0.30,<1", "redis>=5.2,<8",
+  "ijson>=3.4,<4",
+]
+
+[project.optional-dependencies]
+translation = ["ctranslate2>=4.6,<5", "sentencepiece>=0.2,<1"]
+dev = ["pytest>=8.3,<10", "pytest-asyncio>=0.25,<2", "pytest-cov>=6,<8",
+       "fakeredis[lua]>=2.27,<3", "ruff>=0.11,<1", "build>=1.2,<2"]
+
+[tool.setuptools.packages.find]
+include = ["vulnarena*"]
+
+[tool.setuptools.package-data]
+vulnarena = ["web/*", "web/assets/*"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["tests"]
+addopts = "--basetemp=.tools/tmp/pytest --cov=vulnarena --cov-report=term-missing --cov-report=xml:verification/coverage.xml --cov-fail-under=80"
+cache_dir = ".tools/cache/pytest"
+markers = ["redis: requires TEST_REDIS_URL pointing to an isolated Redis database"]
+
+[tool.coverage.run]
+data_file = "verification/.coverage"
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+cache-dir = ".tools/cache/ruff"
+extend-exclude = [".tools", "verification", "data", "frontend", "pip-*", "pytest-of-*"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "ASYNC"]
+
+[tool.ruff.lint.per-file-ignores]
+# 内联 CSS/HTML 天然会超长
+"vulnarena/procure/ui.py" = ["E501"]
+"vulnarena/console.py" = ["E501"]
+"vulnarena/arena/static/*" = ["E501"]

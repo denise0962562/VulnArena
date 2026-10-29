@@ -1,0 +1,12 @@
+*
+!pyproject.toml
+!requirements.lock
+!README.md
+!vulnscope/
+!vulnscope/**
+!frontend/
+!frontend/**
+frontend/node_modules
+vulnscope/web
+**/__pycache__
+**/*.pyc
