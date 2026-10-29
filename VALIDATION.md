@@ -46,7 +46,7 @@
 
 下面保留先前开发验收记录，作为历史信息，不代表当前数据库实现。
 
-日期：2026-10-25（Asia/Shanghai）。工作目录：`E:\AAA信息安全学习路径\VulnArena`。
+日期：2026-10-25（Asia/Shanghai）。工作目录：`<项目目录>`。
 
 初始检查只有 `.idea` 中 5 个 IDE 文件，无项目源码，无 Git 仓库、AGENTS.md 或原始开发提示词文件清单。
 因此没有依据宣称初始要求为“17 个文件”。项目实际目录与文件以本节末清单为准。
@@ -128,7 +128,7 @@
 真实闭环任务 ID：`ac0b830e-b416-4273-835a-257bf55964be`。
 开始于 `2026-10-25T15:41:07.938965Z`，完成于 `2026-10-25T15:41:10.447029Z`；
 processed=1，changed=1，SUCCESS，error=null。
-SQLite 文件为 `E:\AAA信息安全学习路径\VulnArena\data\vulnarena.db`。
+SQLite 文件为 `<项目目录>\data\vulnarena.db`。
 查询记录 `CVE-2021-44228`：CVSS 3.1 / 10.0 / CRITICAL，状态 Analyzed；
 原始 v2 和 SSVC 评分同时保留。已通过独立 SQLite 连接确认文件中持久化记录。
 
