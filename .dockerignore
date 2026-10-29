@@ -2,11 +2,11 @@
 !pyproject.toml
 !requirements.lock
 !README.md
-!vulnscope/
-!vulnscope/**
+!vulnarena/
+!vulnarena/**
 !frontend/
 !frontend/**
 frontend/node_modules
-vulnscope/web
+vulnarena/web
 **/__pycache__
 **/*.pyc
