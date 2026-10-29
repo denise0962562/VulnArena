@@ -548,9 +548,16 @@
     body.className = "cnt";
     body.append(brief, hintBlock, tools, commandBlock, answer);
 
+    let hintSent = false;
     hintBtn.addEventListener("click", () => {
       hintBlock.classList.toggle("hidden");
-      hintBtn.textContent = hintBlock.classList.contains("hidden") ? "提示" : "收起提示";
+      const hiddenNow = hintBlock.classList.contains("hidden");
+      hintBtn.textContent = hiddenNow ? "提示" : "收起提示";
+      // 提示有成本：每个步骤首次展开时记一次，影响本关得分
+      if (!hiddenNow && !hintSent && currentSession) {
+        hintSent = true;
+        fetch(`/api/arena/sessions/${currentSession}/hint`, { method: "POST" }).catch(() => {});
+      }
     });
     cmdBtn.addEventListener("click", () => {
       commandBlock.classList.toggle("hidden");

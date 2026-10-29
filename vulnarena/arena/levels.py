@@ -154,6 +154,8 @@ def progress(sessions: list[ArenaSession]) -> list[LevelProgress]:
             matched = level if level is not None else _match_by_category(trace.category)
             if matched is None:
                 continue
+            if matched.mystery and hints > 0:
+                continue  # 神秘关卡考的是独立侦察：用过提示就不算通过
             if matched.id in best:
                 continue
             score = score_for(matched, hints)

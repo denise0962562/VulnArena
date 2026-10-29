@@ -64,3 +64,17 @@ async def test_levels_endpoint_lists_all_levels():
     assert payload[0]["points"] == 10 and payload[4]["points"] == 50
     assert payload[-1]["id"] == "mystery"
     assert all("check" not in item for item in payload)  # 判据说明不外泄给前端
+
+
+async def test_mystery_needs_a_clean_run(arena):
+    """神秘关卡：用过提示就不算通过。"""
+    client, state, runtime = arena
+    ctx = ArenaContext(client=client, state=state, runtime=runtime, session_id="m1")
+    session = await run_pipeline(ctx)
+    session.level_id = "mystery"
+
+    session.hint_uses = 0
+    assert next(item for item in progress([session]) if item.id == "mystery").solved
+
+    session.hint_uses = 2
+    assert not next(item for item in progress([session]) if item.id == "mystery").solved
