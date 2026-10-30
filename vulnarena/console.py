@@ -107,7 +107,15 @@ playBtn.addEventListener('click', async () => {
   }
 });
 
-window.addEventListener("error", (event) => {`n  const hint = document.getElementById("play-hint");`n  if (hint) hint.textContent = "页面脚本出错：" + event.message;`n});`n`nload().catch((error) => {`n  const hint = document.getElementById("play-hint");`n  if (hint) hint.textContent = "加载历史失败：" + error.message;`n});
+window.addEventListener("error", (event) => {
+  const hint = document.getElementById("play-hint");
+  if (hint) hint.textContent = "页面脚本出错：" + event.message;
+});
+
+load().catch((error) => {
+  const hint = document.getElementById("play-hint");
+  if (hint) hint.textContent = "加载历史失败：" + error.message;
+});
 </script>
 """
 
