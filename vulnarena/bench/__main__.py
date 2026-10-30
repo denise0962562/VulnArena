@@ -16,6 +16,7 @@ from pathlib import Path
 from vulnarena.arena.policy import WafRule
 from vulnarena.arena.templates import RULE_TEMPLATES
 from vulnarena.bench.corpus import Corpus, load_corpus
+from vulnarena.bench.dataset import build_pairs, write_jsonl
 from vulnarena.bench.generate import generate_rule
 from vulnarena.bench.report import to_json, to_markdown
 from vulnarena.bench.runner import evaluate, evaluate_all
@@ -190,6 +191,22 @@ def _cmd_selfplay(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_dataset(args: argparse.Namespace) -> int:
+    corpus = load_corpus(args.corpus)
+    pairs = build_pairs(corpus, rounds=args.rounds, category=args.category)
+    if not pairs:
+        print("没产出可用样本（模板规则可能本来就够宽）")
+        return 0
+    written = write_jsonl(pairs, args.out)
+    print(f"{written} 条 preference pair -> {args.out}")
+    for pair in pairs:
+        print(
+            f"  R{pair.round_no}  chosen={pair.chosen_recall:.0%}  "
+            f"rejected={pair.rejected_recall:.0%}"
+        )
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m vulnarena.bench", description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -217,6 +234,13 @@ def main(argv: list[str] | None = None) -> int:
     play.add_argument("--json", type=Path, default=None)
     play.add_argument("--markdown", type=Path, default=None)
     play.set_defaults(func=_cmd_selfplay)
+
+    data = sub.add_parser("dataset", help="把自博弈差集导出成训练数据（JSONL）")
+    data.add_argument("--rounds", type=int, default=3)
+    data.add_argument("--category", default="sqli")
+    data.add_argument("--corpus", type=Path, default=None)
+    data.add_argument("--out", type=Path, default=Path("reports/sft.jsonl"))
+    data.set_defaults(func=_cmd_dataset)
 
     args = parser.parse_args(argv)
     return int(args.func(args))

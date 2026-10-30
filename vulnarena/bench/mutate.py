@@ -11,7 +11,7 @@ from urllib.parse import quote
 SPACE = re.compile(r"\s+")
 
 # 每类只是"可用的变形手法"，不代表全部绕过方式
-TRANSFORMS = ("comment", "case", "space", "keyword", "encode")
+TRANSFORMS = ("comment", "case", "space", "keyword", "encode", "hash", "true")
 
 
 def _comment(sample: str) -> str:
@@ -37,12 +37,24 @@ def _encode(sample: str) -> str:
     return quote(sample, safe="/?=&|{}[]:\"',.-_")
 
 
+
+def _hash_comment(sample: str) -> str:
+    """把 -- 注释换成 MySQL 的 # 注释：规则只写了 -- 就失效。"""
+    return re.sub(r"--\s*$", "#", sample)
+
+
+def _always_true(sample: str) -> str:
+    """' or 1=1 换成 ' or 'a'='a：语义等价，字面完全不同。"""
+    return re.sub(r"(?i)('\s*or\s+'?1'?\s*=\s*'?1'?)", "' or 'a'='a", sample)
+
 _FUNCTIONS = {
     "comment": _comment,
     "case": _case,
     "space": _space,
     "keyword": _keyword,
     "encode": _encode,
+    "hash": _hash_comment,
+    "true": _always_true,
 }
 
 

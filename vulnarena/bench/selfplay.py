@@ -51,7 +51,8 @@ def _merge(corpus: Corpus, added: dict[str, list[str]]) -> Corpus:
         for sample in samples:
             if sample not in attacks[category]:
                 attacks[category].append(sample)
-    return Corpus(attacks=attacks, benign=list(corpus.benign))
+    # 归一化：编码过的变体在 WAF 眼里会先被解码，评测必须按解码后的文本算
+    return Corpus(attacks=attacks, benign=list(corpus.benign)).normalised()
 
 
 async def run_selfplay(
