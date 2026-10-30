@@ -13,7 +13,13 @@ from redis.backoff import NoBackoff
 from redis.exceptions import RedisError
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
-from starlette.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
+from starlette.responses import (
+    HTMLResponse,
+    JSONResponse,
+    RedirectResponse,
+    Response,
+    StreamingResponse,
+)
 from starlette.staticfiles import StaticFiles
 
 from vulnarena.arena import (
@@ -463,15 +469,40 @@ def create_app(
             raise HTTPException(404, "session not found")
         return build_review(session).model_dump()
 
-    @app.get("/lab", include_in_schema=False)
-    async def lab_console() -> HTMLResponse:
+    def lab_response(*, error: str = "", status_code: int = 200) -> HTMLResponse:
         targets = [target.model_dump(mode="json") for target in app.state.targets.all()]
         levels = [item.model_dump() for item in level_progress(app.state.sessions.all())]
         app.state.last_score = level_total(level_progress(app.state.sessions.all()))
         score = level_total(level_progress(app.state.sessions.all()))
         return HTMLResponse(
-            render_lab(targets, app.state.sessions.recent(), levels, score, level_rank(score)),
+            render_lab(
+                targets,
+                app.state.sessions.recent(),
+                levels,
+                score,
+                level_rank(score),
+                selfplay=getattr(app.state, "selfplay", {}),
+                selfplay_error=error,
+            ),
+            status_code=status_code,
             headers={"Cache-Control": "no-store, must-revalidate"},
+        )
+
+    @app.get("/lab", include_in_schema=False)
+    async def lab_console() -> HTMLResponse:
+        return lab_response()
+
+    @app.post("/lab/selfplay", include_in_schema=False)
+    async def lab_selfplay() -> Response:
+        try:
+            await bench_selfplay(rounds=3, category="sqli", red_limit=20)
+        except Exception:
+            logger.exception("Lab selfplay failed")
+            return lab_response(
+                error="自博弈运行失败，请稍后重试；下方保留上次结果。", status_code=503
+            )
+        return RedirectResponse(
+            "/lab", status_code=303, headers={"Cache-Control": "no-store, must-revalidate"}
         )
 
     @app.get("/arena", include_in_schema=False)
