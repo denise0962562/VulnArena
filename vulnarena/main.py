@@ -39,10 +39,15 @@ from vulnarena.arena.restore import apply_patch, restore_vulnerable
 from vulnarena.arena.review import build_review
 from vulnarena.arena.stream import event_stream
 from vulnarena.arena.targets import TargetRegistry
+from vulnarena.bench.corpus import load_corpus
+from vulnarena.bench.selfplay import run_selfplay
 from vulnarena.config import Settings
 from vulnarena.console import render as render_lab
 from vulnarena.db import Database
 from vulnarena.descriptions import DescriptionTranslator
+from vulnarena.intelligence.router import router as intelligence_router
+from vulnarena.intelligence.service import IntelligenceService
+from vulnarena.intelligence.sources import source_signature
 from vulnarena.nvd import NVDClient
 from vulnarena.procure import ProcureState, build_procure_app
 from vulnarena.procure.models import DefectFlag
@@ -104,6 +109,8 @@ def create_app(
             app.state.db, app.state.store = db, store
             app.state.sync = SyncService(db, store, nvd_client, settings)
             app.state.descriptions = DescriptionTranslator(db, settings.translation_model)
+            app.state.intelligence = IntelligenceService(db, settings)
+            await app.state.intelligence.startup()
             # The arena shares Redis with tasks but never with the task lease keys.
             runtime.policy_store = RedisPolicyStore(redis_client)
             runtime.events = RedisEventBus(redis_client)
@@ -124,10 +131,13 @@ def create_app(
                 await app.state.sync.collector.aclose()
             if hasattr(app.state, "descriptions"):
                 await app.state.descriptions.close()
+            if hasattr(app.state, "intelligence"):
+                await app.state.intelligence.close()
             await redis_client.aclose()
             await db.aclose()
 
     app = FastAPI(title="VulnArena", version="0.1.0", lifespan=lifespan)
+    app.include_router(intelligence_router)
     app.state.runtime = runtime
     app.state.portal_state = portal_state
     app.state.sessions = SessionRegistry()
@@ -225,6 +235,7 @@ def create_app(
         if record is None:
             raise HTTPException(404, "CVE not found")
         study = await app.state.db.get_study(cve_id)
+        ai_source_signature = source_signature(record, study)
         study = merge_description(
             record,
             study
@@ -236,6 +247,7 @@ def create_app(
             },
             await app.state.db.get_chinese(cve_id),
         )
+        study["ai_source_signature"] = ai_source_signature
         return VulnerabilityView(
             **record.model_dump(),
             study=study,
@@ -274,9 +286,13 @@ def create_app(
         if record is None:
             raise HTTPException(404, "CVE not found")
         study = await app.state.db.get_study(cve_id)
+        signature = source_signature(record, study)
         study = merge_description(record, study, await app.state.db.get_chinese(cve_id))
+        card = await app.state.intelligence.get_card(cve_id)
+        if not card or card["status"] != "complete" or card.get("signature") != signature:
+            card = None
         return Response(
-            study_bundle(record, study),
+            study_bundle(record, study, ai_card=card),
             media_type="application/zip",
             headers={
                 "Content-Disposition": f'attachment; filename="{record.cve_id}-study.zip"',
@@ -364,6 +380,33 @@ def create_app(
     @app.get("/api/arena/sessions")
     async def arena_sessions() -> list[dict[str, object]]:
         return app.state.sessions.recent()
+
+    @app.post("/api/bench/selfplay")
+    async def bench_selfplay(rounds: int = 3, category: str = "sqli", red_limit: int = 20) -> dict:
+        """跑一轮离线自博弈（确定性红队，不需要模型）。"""
+        from vulnarena.bench.mutate import mutate
+
+        def red(current, target):
+            known = set(current.attacks.get(target, []))
+            fresh: list[str] = []
+            for sample in current.attacks.get(target, []):
+                for variant in mutate(sample):
+                    if variant not in known and variant not in fresh:
+                        fresh.append(variant)
+                if len(fresh) >= red_limit:
+                    return fresh
+            return fresh
+
+        results = await run_selfplay(
+            load_corpus(), rounds=max(1, min(rounds, 10)), category=category, red=red
+        )
+        payload = [item.to_dict() for item in results]
+        app.state.selfplay = {"category": category, "rounds": payload}
+        return app.state.selfplay
+
+    @app.get("/api/bench/selfplay")
+    async def bench_selfplay_latest() -> dict:
+        return getattr(app.state, "selfplay", {"category": "sqli", "rounds": []})
 
     @app.get("/api/arena/levels")
     async def arena_levels() -> list[dict]:

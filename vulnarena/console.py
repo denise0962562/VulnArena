@@ -42,6 +42,76 @@ a.btn:hover{border-color:var(--blue);color:var(--blue)}
 """
 
 
+SELFPLAY_SCRIPT = """
+<script>
+const playBtn = document.getElementById('play');
+const roundsBody = document.getElementById('rounds');
+const curve = document.getElementById('curve');
+
+function draw(rows) {
+  curve.innerHTML = '';
+  if (!rows.length) return;
+  const pad = 24, w = 640 - pad * 2, h = 200 - pad * 2;
+  const points = rows.map((row, i) => {
+    const x = pad + (rows.length === 1 ? w / 2 : (w * i) / (rows.length - 1));
+    const y = pad + h * (1 - row.recall);
+    return `${x},${y}`;
+  });
+  const line = document.createElementNS('http://www.w3.org/2000/svg', 'polyline');
+  line.setAttribute('points', points.join(' '));
+  line.setAttribute('fill', 'none');
+  line.setAttribute('stroke', '#4f8cff');
+  line.setAttribute('stroke-width', '2');
+  curve.append(line);
+  rows.forEach((row, i) => {
+    const [x, y] = points[i].split(',');
+    const dot = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+    dot.setAttribute('cx', x); dot.setAttribute('cy', y); dot.setAttribute('r', '4');
+    dot.setAttribute('fill', row.passed ? '#35d07f' : '#ff5d6c');
+    curve.append(dot);
+    const label = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+    label.setAttribute('x', x); label.setAttribute('y', Number(y) - 8);
+    label.setAttribute('fill', '#7c8aa5'); label.setAttribute('font-size', '11');
+    label.setAttribute('text-anchor', 'middle');
+    label.textContent = `${Math.round(row.recall * 100)}%`;
+    curve.append(label);
+  });
+}
+
+function render(payload) {
+  const rows = payload.rounds || [];
+  roundsBody.innerHTML = rows.map((row) => `<tr>
+    <td>${row.round_no}</td><td>${row.corpus_attacks}</td><td>+${row.red_added}</td>
+    <td>${Math.round(row.recall * 100)}%</td><td>${(row.false_positive * 100).toFixed(1)}%</td>
+    <td><span class="tag ${row.passed ? 'ok' : 'bad'}">${row.passed ? 'OK' : 'REJECT'}</span></td>
+  </tr>`).join('');
+  draw(rows);
+}
+
+async function load() {
+  const response = await fetch('/api/bench/selfplay');
+  render(await response.json());
+}
+
+playBtn.addEventListener('click', async () => {
+  playBtn.disabled = true;
+  document.getElementById('play-hint').textContent = '跑着呢…';
+  try {
+    const response = await fetch('/api/bench/selfplay?rounds=3', { method: 'POST' });
+    render(await response.json());
+    document.getElementById('play-hint').textContent = '跑完了';
+  } catch (error) {
+    document.getElementById('play-hint').textContent = '失败：' + error.message;
+  } finally {
+    playBtn.disabled = false;
+  }
+});
+
+load();
+</script>
+"""
+
+
 def esc(value: object) -> str:
     return html.escape("" if value is None else str(value))
 
@@ -109,7 +179,8 @@ def render(
             "<tr><td colspan='4' class='muted'>还没有演练记录，点上面的按钮跑一场。</td></tr>"
         )
 
-    return f"""<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">
+    return (
+        f"""<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">
 <title>靶场管理 · VulnArena</title><style>{STYLE}</style></head><body>
 <header><div class="brand">Vuln<span>Scope</span> · 靶场管理</div>
 <div class="row"><a class="btn" href="/">返回情报台</a></div></header>
@@ -132,6 +203,17 @@ def render(
       <a class="btn" href="/api/procure/ui/login" target="_blank">打开靶场前台（采购系统）</a>
       <span id="hint" class="muted"></span>
     </div>
+  </div>
+
+  <div class="card">
+    <h3>自博弈曲线（红队造变体 → 蓝队召回下降）</h3>
+    <div class="row">
+      <button id="play">跑一轮（3 回合）</button>
+      <span id="play-hint" class="muted">确定性红队，不调用模型，几秒出结果</span>
+    </div>
+    <svg id="curve" viewBox="0 0 640 200" style="width:100%;height:200px;margin-top:12px"></svg>
+    <table><thead><tr><th>轮次</th><th>语料</th><th>红队新增</th><th>召回</th><th>误杀</th><th>判定</th></tr></thead>
+    <tbody id="rounds"><tr><td colspan="6" class="muted">还没跑过</td></tr></tbody></table>
   </div>
 
   <div class="card">
@@ -172,5 +254,7 @@ document.getElementById('start').addEventListener('click', async (event) => {{
     button.disabled = false;
   }}
 }});
-</script>
+
 </body></html>"""
+        + SELFPLAY_SCRIPT
+    )
