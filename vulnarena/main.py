@@ -470,7 +470,8 @@ def create_app(
         app.state.last_score = level_total(level_progress(app.state.sessions.all()))
         score = level_total(level_progress(app.state.sessions.all()))
         return HTMLResponse(
-            render_lab(targets, app.state.sessions.recent(), levels, score, level_rank(score))
+            render_lab(targets, app.state.sessions.recent(), levels, score, level_rank(score)),
+            headers={"Cache-Control": "no-store, must-revalidate"},
         )
 
     @app.get("/arena", include_in_schema=False)

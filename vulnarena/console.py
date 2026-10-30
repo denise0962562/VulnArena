@@ -218,6 +218,7 @@ def render(
     <div class="row">
       <button id="play">跑一轮（3 回合）</button>
       <span id="play-hint" class="muted">确定性红队，不调用模型，几秒出结果</span>
+      <span class="muted" style="margin-left:auto">build v4</span>
     </div>
     <svg id="curve" viewBox="0 0 640 200" style="width:100%;height:200px;margin-top:12px"></svg>
     <table><thead><tr><th>轮次</th><th>语料</th><th>红队新增</th><th>召回</th><th>误杀</th><th>判定</th></tr></thead>
