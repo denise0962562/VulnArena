@@ -37,15 +37,15 @@ def _encode(sample: str) -> str:
     return quote(sample, safe="/?=&|{}[]:\"',.-_")
 
 
-
 def _hash_comment(sample: str) -> str:
     """把 -- 注释换成 MySQL 的 # 注释：规则只写了 -- 就失效。"""
-    return re.sub(r"--\s*$", "#", sample)
+    return re.sub(r"--", "#", sample, count=1)
 
 
 def _always_true(sample: str) -> str:
     """' or 1=1 换成 ' or 'a'='a：语义等价，字面完全不同。"""
     return re.sub(r"(?i)('\s*or\s+'?1'?\s*=\s*'?1'?)", "' or 'a'='a", sample)
+
 
 _FUNCTIONS = {
     "comment": _comment,

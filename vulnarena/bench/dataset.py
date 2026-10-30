@@ -33,6 +33,7 @@ class Pair:
 
     def to_dict(self) -> dict:
         return {
+            "task": "write a waf regex",
             "round": self.round_no,
             "category": self.category,
             "prompt": self.prompt,
@@ -45,8 +46,16 @@ class Pair:
 
 
 def widen(regex: str) -> str:
-    """把"空白"放宽成"空白或注释"——这是注释拆分绕过的标准修法。"""
+    """把一条件规则放宽到"能覆盖红队的等价变形"，但仍不误伤正常流量。
+
+    三步：
+    1. 空白 → 空白或注释（`union/**/select`）
+    2. 追加 MySQL `#` 注释分支（`admin'#`）
+    3. 追加泛化的布尔恒真分支（`' or 'a'='a`）
+    """
     widened = regex.replace(r"\s+", r"[\s/*]*").replace(r"\s*", r"[\s/*]*")
+    if widened.endswith(")"):
+        widened = widened[:-1] + r"|'[\s/*]*or[\s/*]*'?[\w]|'[\s/*]*#)"
     return widened
 
 
@@ -60,8 +69,11 @@ def build_pairs(corpus: Corpus, *, rounds: int = 3, category: str = "sqli") -> l
     current = corpus
     for index in range(1, rounds + 1):
         added = mutate_all({category: current.attacks.get(category, [])})
-        fresh = [sample for sample in added.get(category, [])
-                 if sample not in current.attacks.get(category, [])][:20]
+        fresh = [
+            sample
+            for sample in added.get(category, [])
+            if sample not in current.attacks.get(category, [])
+        ][:20]
         if fresh:
             current = Corpus(
                 attacks={
@@ -112,3 +124,24 @@ def write_jsonl(pairs: list[Pair], path) -> int:
         for pair in pairs:
             handle.write(json.dumps(pair.to_dict(), ensure_ascii=False) + "\n")
     return len(pairs)
+
+
+def classification_records(corpus: Corpus) -> list[dict]:
+    """把语料本身变成"判断攻击/正常"的监督样本——量足、无需模型。"""
+    records: list[dict] = []
+    for category, samples in corpus.attacks.items():
+        for sample in samples:
+            records.append(
+                {"task": "classify", "category": category, "text": sample, "label": "attack"}
+            )
+    for sample in corpus.benign:
+        records.append(
+            {"task": "classify", "category": "benign", "text": sample, "label": "benign"}
+        )
+    return records
+
+
+def build_records(corpus: Corpus, *, rounds: int = 3, category: str = "sqli") -> list[dict]:
+    records = [pair.to_dict() for pair in build_pairs(corpus, rounds=rounds, category=category)]
+    records.extend(classification_records(corpus))
+    return records

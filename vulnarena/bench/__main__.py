@@ -16,7 +16,7 @@ from pathlib import Path
 from vulnarena.arena.policy import WafRule
 from vulnarena.arena.templates import RULE_TEMPLATES
 from vulnarena.bench.corpus import Corpus, load_corpus
-from vulnarena.bench.dataset import build_pairs, write_jsonl
+from vulnarena.bench.dataset import build_pairs, build_records
 from vulnarena.bench.generate import generate_rule
 from vulnarena.bench.report import to_json, to_markdown
 from vulnarena.bench.runner import evaluate, evaluate_all
@@ -194,11 +194,20 @@ def _cmd_selfplay(args: argparse.Namespace) -> int:
 def _cmd_dataset(args: argparse.Namespace) -> int:
     corpus = load_corpus(args.corpus)
     pairs = build_pairs(corpus, rounds=args.rounds, category=args.category)
-    if not pairs:
-        print("没产出可用样本（模板规则可能本来就够宽）")
+    records = build_records(corpus, rounds=args.rounds, category=args.category)
+    if not records:
+        print("没产出可用样本")
         return 0
-    written = write_jsonl(pairs, args.out)
-    print(f"{written} 条 preference pair -> {args.out}")
+
+    args.out.parent.mkdir(parents=True, exist_ok=True)
+    with args.out.open("w", encoding="utf-8") as handle:
+        for record in records:
+            handle.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+    print(
+        f"{len(records)} 条记录 -> {args.out}"
+        f"（preference pair {len(pairs)} + 分类样本 {len(records) - len(pairs)}）"
+    )
     for pair in pairs:
         print(
             f"  R{pair.round_no}  chosen={pair.chosen_recall:.0%}  "
