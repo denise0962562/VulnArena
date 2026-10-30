@@ -10,9 +10,9 @@ import json
 from pathlib import Path
 
 DEFAULT_ROUNDS = [
-    {"round_no": 1, "corpus_attacks": 28, "recall": 0.79, "false_positive": 0.0},
-    {"round_no": 2, "corpus_attacks": 50, "recall": 0.70, "false_positive": 0.0},
-    {"round_no": 3, "corpus_attacks": 70, "recall": 0.66, "false_positive": 0.0},
+    {"round_no": 1, "corpus_attacks": 14, "recall": 0.8571, "false_positive": 0.0},
+    {"round_no": 2, "corpus_attacks": 20, "recall": 0.8500, "false_positive": 0.0},
+    {"round_no": 3, "corpus_attacks": 22, "recall": 0.8182, "false_positive": 0.0},
 ]
 
 WIDTH, HEIGHT = 720, 320

@@ -34,13 +34,28 @@ class Corpus:
         return sum(len(samples) for samples in self.attacks.values())
 
     def normalised(self) -> "Corpus":
-        """统一做一遍归一化，避免"规则没命中"其实是被编码差异影响。"""
+        """归一化并去重。
+
+        大小写、空白替换、URL 编码这些变形，解码后往往是**同一个字符串**；
+        如果不去重，同一个等价载荷会被算好几次，把召回率抬高。
+        """
+
+        def unique(samples: list[str]) -> list[str]:
+            seen: set[str] = set()
+            result: list[str] = []
+            for sample in samples:
+                key = normalise(sample)
+                if key in seen:
+                    continue
+                seen.add(key)
+                result.append(key)
+            return result
+
         return Corpus(
             attacks={
-                str(category): [normalise(sample) for sample in samples]
-                for category, samples in self.attacks.items()
+                str(category): unique(samples) for category, samples in self.attacks.items()
             },
-            benign=[normalise(sample) for sample in self.benign],
+            benign=unique(self.benign),
         )
 
 
