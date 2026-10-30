@@ -19,3 +19,4 @@ pytest-of-*/
 node_modules/
 vulnarena/web/
 .tmp-pytest/
+reports/
