@@ -7,6 +7,8 @@
 import json
 import logging
 
+from pydantic import BaseModel, Field
+
 from vulnarena.arena.agents import RuleIdea
 from vulnarena.arena.corpus import Category
 from vulnarena.arena.deepseek import DeepSeekClient
@@ -59,3 +61,31 @@ async def generate_rule(
         source="llm",
         rationale=idea.rationale or "model proposal",
     )
+
+
+VARIANT_SYSTEM = """你是红队。给你一条正在生效的 WAF 规则和几条已知攻击样本，
+请写出能绕过该规则、但语义等价的攻击载荷。
+允许的手法：注释拆分、大小写、等价关键字、空白替换、编码。
+只输出 json：{"payloads": ["...", "..."]}，最多 6 条，不要解释。"""
+
+
+class VariantIdea(BaseModel):
+    payloads: list[str] = Field(min_length=1, max_length=8)
+
+
+async def generate_variants(
+    client: DeepSeekClient | None, category: str, corpus: Corpus, *, regex: str = ""
+) -> list[str]:
+    """模型造绕过样本；不可用时返回空列表（调用方退回确定性变形）。"""
+    if client is None or not client.available:
+        return []
+    samples = corpus.attacks.get(category, [])[:3]
+    payload = json.dumps(
+        {"rule_regex": regex, "attack_samples": samples, "category": category},
+        ensure_ascii=False,
+    )
+    idea = await client.json_chat(VARIANT_SYSTEM, payload, VariantIdea)
+    if not isinstance(idea, VariantIdea):
+        return []
+    known = set(corpus.attacks.get(category, []))
+    return [item.strip() for item in idea.payloads if item.strip() and item.strip() not in known]
