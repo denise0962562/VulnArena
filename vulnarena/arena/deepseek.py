@@ -31,6 +31,9 @@ class DeepSeekClient:
             timeout=settings.arena_timeout,
             transport=transport,
             base_url=settings.deepseek_base_url,
+            # 不继承系统/环境代理：代理对 github 有用，却会让 api.deepseek.com
+            # 的 TLS 握手直接断开，客户端只按自己的配置出网。
+            trust_env=False,
             headers={"Authorization": f"Bearer {self.api_key}"} if self.api_key else {},
         )
 
