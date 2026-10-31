@@ -69,6 +69,31 @@ NVD 情报台新增带引用的中文问答、可下载学习卡片、评测和�
 
 本轮改动、验收记录、运行边界和五分钟演示路线见 [求职项目修整报告](docs/REPAIR_REPORT.md)。
 
+## 界面
+
+**情报台**：本地 41.6 万条漏洞，按严重度/年份/语言筛选，中文摘要覆盖率直接显示。
+
+![情报台](docs/figures/main-board.png)
+
+**漏洞详情**：AI 学习卡按"问题是什么 / 触发条件 / 可能影响 / 学习要点"拆解，
+每段都带原文引用（`[S1]`），缺失信息明确标注而不是编造；下方是中英对照。
+
+![AI 学习卡](docs/figures/detail-ai-card.png)
+
+![中英对照与引用](docs/figures/detail-bilingual.png)
+
+**靶场管理台**：靶标、关卡进度、段位，以及自博弈曲线——点一次「跑一轮」，
+服务端跑三个回合并重画召回曲线。
+
+![靶场管理台](docs/figures/lab-overview.png)
+
+![自博弈曲线](docs/figures/lab-selfplay.png)
+
+**观战台复盘**：一轮演练结束后，红队每步"做了什么 / 结果 / 学到什么 / 怎么防"
+逐条列出，蓝队补的规则和关闭的缺陷也一并列出。
+
+![复盘](docs/figures/arena-review.png)
+
 ## 快速启动（PowerShell）
 
 ```powershell
