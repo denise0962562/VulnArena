@@ -61,6 +61,7 @@ class RegressionResult(BaseModel):
 
 
 class ArenaStatus(StrEnum):
+    INTERRUPTED = "INTERRUPTED"
     CREATED = "CREATED"
     BLUEPRINT_READY = "BLUEPRINT_READY"
     PROBING = "PROBING"
@@ -120,6 +121,8 @@ class ArenaSession(BaseModel):
     session_id: str
     status: ArenaStatus = ArenaStatus.CREATED
     agent_mode: str = "deterministic"
+    model_calls: int = 0
+    fallback_reason: str = ""
     plan_rationale: str = ""
     level_id: str = ""
     hint_uses: int = 0

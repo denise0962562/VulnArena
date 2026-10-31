@@ -27,6 +27,8 @@ class DeepSeekClient:
         self.sleep = sleep
         self.api_key = settings.deepseek_api_key.get_secret_value()
         self.calls = 0
+        self.reservation_lock = asyncio.Lock()
+        self.last_failure = ""
         self.http = httpx.AsyncClient(
             timeout=settings.arena_timeout,
             transport=transport,
@@ -65,22 +67,32 @@ class DeepSeekClient:
             "max_tokens": max_tokens,
         }
         for attempt in range(3):
-            self.calls += 1
+            async with self.reservation_lock:
+                if self.budget_left <= 0:
+                    self.last_failure = "budget_exhausted"
+                    return None
+                self.calls += 1
             try:
                 response = await self.http.post("/chat/completions", json=body)
             except httpx.RequestError:
+                self.last_failure = "connection_error"
                 await self.sleep(2**attempt)
                 continue
             if response.status_code in (429, 500, 502, 503, 504):
+                self.last_failure = f"http_{response.status_code}"
                 await self.sleep(2**attempt)
                 continue
             if response.status_code != 200:
+                self.last_failure = f"http_{response.status_code}"
                 logger.warning("deepseek returned %s; falling back", response.status_code)
                 return None
             try:
                 content = response.json()["choices"][0]["message"]["content"]
-                return schema.model_validate_json(content)
+                parsed = schema.model_validate_json(content)
+                self.last_failure = ""
+                return parsed
             except (KeyError, IndexError, TypeError, ValueError, ValidationError) as exc:
+                self.last_failure = "invalid_output"
                 logger.warning("deepseek payload rejected: %s", type(exc).__name__)
                 return None
         return None

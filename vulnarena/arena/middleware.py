@@ -5,6 +5,7 @@ takes effect within a second and a Redis outage degrades the gateway instead of
 breaking the request path.
 """
 
+import asyncio
 import base64
 import json
 
@@ -54,7 +55,13 @@ class WafMiddleware(BaseHTTPMiddleware):
         body = body_bytes.decode("utf-8", "replace")
         raw, normalised = observation(request.method, request.url.path, request.url.query, body)
         for compiled in rules:
-            if compiled.pattern.search(raw) or compiled.pattern.search(normalised):
+            try:
+                hits = await asyncio.to_thread(compiled.pattern.search_many, [raw, normalised])
+            except (TimeoutError, ValueError):
+                return await self._deny(
+                    request, session_id, 503, "waf rule execution timeout", compiled.rule.id
+                )
+            if any(hits):
                 return await self._deny(
                     request, session_id, 403, "blocked by waf", compiled.rule.id, raw[:PREVIEW]
                 )

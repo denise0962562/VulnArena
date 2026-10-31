@@ -16,6 +16,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+ai = ["numpy>=1.26,<3", "packaging>=24,<27"]
 translation = ["ctranslate2>=4.6,<5", "sentencepiece>=0.2,<1"]
 dev = ["pytest>=8.3,<10", "pytest-asyncio>=0.25,<2", "pytest-cov>=6,<8",
        "fakeredis[lua]>=2.27,<3", "ruff>=0.11,<1", "build>=1.2,<2"]
@@ -24,7 +25,7 @@ dev = ["pytest>=8.3,<10", "pytest-asyncio>=0.25,<2", "pytest-cov>=6,<8",
 include = ["vulnarena*"]
 
 [tool.setuptools.package-data]
-vulnarena = ["web/*", "web/assets/*"]
+vulnarena = ["web/*", "web/assets/*", "migrations/*.sql", "intelligence/data/*.json", "templates/*.html"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

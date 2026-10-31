@@ -1,0 +1,13 @@
+services:
+  api:
+    build:
+      context: .
+      target: ai
+    environment:
+      VULNARENA_AI_API_KEY: ${VULNARENA_AI_API_KEY:-}
+      VULNARENA_AI_BASE_URL: ${VULNARENA_AI_BASE_URL:-}
+      VULNARENA_AI_MODEL: ${VULNARENA_AI_MODEL:-}
+      VULNARENA_AI_EMBEDDING_DIRECTORY: /app/data/models/nvd-e5-small-int8
+      VULNARENA_AI_EMBEDDING_THREADS: "2"
+    volumes:
+      - ./data/models:/app/data/models:ro

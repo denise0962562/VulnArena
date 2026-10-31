@@ -7,9 +7,10 @@
 3. 评测：跑一遍全量语料，得到召回与误杀
 4. 记录：这一轮的指标落进 `RoundResult`
 
-跑多轮就能看到"红队一变招，蓝队召回就掉"的曲线——这就是"进化"的可量化形态。
+固定配置下评测唯一语料的覆盖变化；结果不保证单调，也不训练模型参数。
 """
 
+import asyncio
 from dataclasses import asdict, dataclass, field
 
 from vulnarena.arena.policy import WafRule
@@ -31,6 +32,7 @@ class RoundResult:
     passed: bool
     note: str = ""
     new_samples: list[str] = field(default_factory=list)
+    red_candidates: int = 0
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -79,7 +81,10 @@ async def run_selfplay(
             added = mutate_all({category: current.attacks.get(category, [])})
             new_samples = added.get(category, [])
 
+        red_candidates = len(new_samples)
+        previous = set(current.attacks.get(category, []))
         current = _merge(current, {category: new_samples} if new_samples else {})
+        new_samples = [item for item in current.attacks.get(category, []) if item not in previous]
 
         rule = await blue(current) if blue is not None else _fallback_rule(category)
         if rule is None:
@@ -95,11 +100,14 @@ async def run_selfplay(
                     passed=False,
                     note="蓝队没给出规则",
                     new_samples=new_samples[:5],
+                    red_candidates=red_candidates,
                 )
             )
             continue
 
-        metrics = evaluate(rule, current, name=f"round-{index}", category=category)
+        metrics = await asyncio.to_thread(
+            evaluate, rule, current, name=f"round-{index}", category=category
+        )
         results.append(
             RoundResult(
                 round_no=index,
@@ -112,6 +120,7 @@ async def run_selfplay(
                 passed=metrics.passed,
                 note="；".join(metrics.reasons),
                 new_samples=new_samples[:5],
+                red_candidates=red_candidates,
             )
         )
     return results

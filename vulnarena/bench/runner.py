@@ -5,9 +5,9 @@
 """
 
 import re
-import time
 
 from vulnarena.arena.policy import WafRule
+from vulnarena.arena.safe_regex import BoundedPattern
 from vulnarena.bench.corpus import Corpus
 from vulnarena.bench.metrics import RuleMetrics
 
@@ -18,7 +18,7 @@ PROBE = "a" * 4096
 
 def _compile(regex: str) -> tuple[re.Pattern[str] | None, str]:
     try:
-        return re.compile(regex), ""
+        return BoundedPattern(regex), ""
     except re.error as exc:
         return None, f"regex does not compile: {exc}"
 
@@ -47,35 +47,33 @@ def evaluate(
     if len(rule.regex) > MAX_REGEX_LENGTH:
         result.reasons.append(f"regex longer than {MAX_REGEX_LENGTH} characters")
 
-    started = time.perf_counter()
-    pattern.search(PROBE)
-    result.elapsed_ms = round((time.perf_counter() - started) * 1000, 3)
-    if result.elapsed_ms / 1000 > MAX_SCAN_SECONDS:
-        result.reasons.append(f"scan exceeded {MAX_SCAN_SECONDS}s on a 4KB probe")
-
     attacks = corpus.attacks.get(target, [])
+    benign = corpus.benign if benign_limit is None else corpus.benign[:benign_limit]
     result.attack_total = len(attacks)
     if not attacks:
         result.reasons.append(f"no attack samples for category {target!r}")
-    caught: list[str] = []
-    for sample in attacks:
-        if pattern.search(sample):
-            caught.append(sample)
-        else:
-            result.missed.append(sample)
-    result.attack_caught = len(caught)
-    result.recall = round(len(caught) / len(attacks), 4) if attacks else 0.0
+    try:
+        pattern.search_many([PROBE])
+        result.elapsed_ms = round(pattern.scan_ms, 3)
+        if result.elapsed_ms / 1000 > MAX_SCAN_SECONDS:
+            result.reasons.append("regex probe exceeded scan budget")
+        hits = pattern.search_many([*attacks, *benign])
+    except (TimeoutError, ValueError):
+        result.reasons.append("regex hard process deadline exceeded")
+        return result
+    caught = hits[: len(attacks)]
+    result.attack_caught = sum(caught)
+    result.missed = [sample for sample, hit in zip(attacks, caught, strict=True) if not hit]
+    result.recall = round(sum(caught) / len(attacks), 4) if attacks else 0.0
     if attacks and result.recall < 1.0:
         result.reasons.append(f"recall {result.recall:.0%} misses {len(result.missed)} sample(s)")
-
-    benign = corpus.benign if benign_limit is None else corpus.benign[:benign_limit]
-    for sample in benign:
-        if pattern.search(sample):
-            result.false_positives.append(sample)
+    result.false_positives = [
+        sample for sample, hit in zip(benign, hits[len(attacks) :], strict=True) if hit
+    ]
     result.benign_hit = len(result.false_positives)
-    result.false_positive = round(len(result.false_positives) / len(benign), 4) if benign else 0.0
+    result.false_positive = round(result.benign_hit / len(benign), 4) if benign else 0.0
     if result.false_positives:
-        result.reasons.append(f"false positive on {len(result.false_positives)} benign sample(s)")
+        result.reasons.append(f"false positive on {result.benign_hit} benign sample(s)")
 
     result.passed = not result.reasons
     return result

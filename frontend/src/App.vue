@@ -26,6 +26,7 @@ import {
   ShieldAlert,
   ShieldCheck,
   SlidersHorizontal,
+  Sparkles,
   X,
 } from 'lucide-vue-next'
 import { api } from './api'
@@ -34,10 +35,11 @@ import { useSync } from './useSync'
 import SeverityBadge from './components/SeverityBadge.vue'
 import SyncDialog from './components/SyncDialog.vue'
 import VulnerabilityDrawer from './components/VulnerabilityDrawer.vue'
+import AIWorkspace from './components/AIWorkspace.vue'
 
 const view = ref('overview')
 const openLab = () => window.location.assign('/lab')
-const titles = { overview: '漏洞情报', tasks: '同步中心', guide: '使用说明' }
+const titles = { overview: '漏洞情报', tasks: '同步中心', guide: '使用说明', ai: 'AI 情报助手' }
 const search = ref('')
 const filters = reactive({
   keyword: '',
@@ -219,6 +221,25 @@ function movePage(offset) {
   void loadList()
 }
 
+function browseAIResult(criteria) {
+  view.value = 'overview'
+  Object.assign(filters, {
+    severity: '',
+    topic: '',
+    status: '',
+    year_from: '',
+    year_to: '',
+    ...criteria,
+  })
+  search.value = criteria.keyword || ''
+  period.value = criteria.year_from
+    ? criteria.year_from === criteria.year_to
+      ? String(criteria.year_from)
+      : criteria.year_from + '-' + criteria.year_to
+    : ''
+  applyFilters()
+}
+
 async function openDetail(item) {
   const sequence = ++detailSequence
   detailLoading.value = item.cve_id
@@ -306,6 +327,14 @@ onUnmounted(() => {
           <BookOpen :size="18" />
           使用说明
         </button>
+        <button
+          :class="{ active: view === 'ai' }"
+          :aria-current="view === 'ai' ? 'page' : undefined"
+          @click="view = 'ai'"
+        >
+          <Sparkles :size="18" />
+          AI 情报助手
+        </button>
         <button class="nav-lab" @click="openLab">
           <Shield :size="18" />
           靶场演练
@@ -375,7 +404,9 @@ onUnmounted(() => {
                   ? '让分散的漏洞信息，成为清晰可追溯的情报。'
                   : view === 'tasks'
                     ? '追踪每一次同步，从官方数据源到本地数据库。'
-                    : '从第一条漏洞开始，建立你的情报工作流。'
+                    : view === 'ai'
+                      ? '检索原文、理解漏洞，用评测验证 AI 的回答。'
+                      : '从第一条漏洞开始，建立你的情报工作流。'
               }}
             </p>
           </div>
@@ -952,6 +983,9 @@ onUnmounted(() => {
           </div>
         </template>
 
+        <template v-else-if="view === 'ai'">
+          <AIWorkspace @open-cve="(id) => openDetail({ cve_id: id })" @browse="browseAIResult" />
+        </template>
         <template v-else>
           <section class="guide-hero">
             <span class="eyebrow">SMALL PROJECT. REAL DATA.</span>

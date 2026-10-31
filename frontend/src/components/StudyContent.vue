@@ -3,6 +3,7 @@ import { computed, onUnmounted, ref, watch } from 'vue'
 import { Download, RefreshCw, ExternalLink, Languages, BookOpen } from 'lucide-vue-next'
 import { api } from '../api'
 import { formatDate, safeReference } from '../format'
+import AIStudyCard from './AIStudyCard.vue'
 
 const props = defineProps({ record: Object })
 const emit = defineEmits(['updated'])
@@ -166,6 +167,10 @@ onUnmounted(() => {
     <p v-if="study.stale" class="warning-note">
       原始记录已更新，请核对公告的采集时间和版本信息。中文摘要会按当前英文内容独立更新。
     </p>
+    <AIStudyCard
+      :key="record.study?.ai_source_signature || record.cve_id"
+      :cve-id="record.cve_id"
+    />
     <div class="topic-tags">
       <span v-for="topic in study.topics" :key="topic" class="topic-tag">{{ topic }}</span>
       <span v-for="cwe in study.weaknesses" :key="cwe" class="topic-tag mono">{{ cwe }}</span>

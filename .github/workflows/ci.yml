@@ -5,6 +5,9 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
     services:
       postgres:
         image: postgres:18-alpine
@@ -49,7 +52,7 @@ jobs:
         working-directory: frontend
       - run: npm run build
         working-directory: frontend
-      - run: python -m pip install -c requirements.lock -e '.[dev]'
+      - run: python -m pip install -c requirements.lock -e '.[dev,ai]'
       - run: ruff check .
       - run: ruff format --check .
       - name: Run pytest
@@ -73,11 +76,15 @@ jobs:
       - run: python -m build
       - run: docker build -t vulnarena:ci .
       - name: Container health and non-root smoke test
+        env:
+          VULNARENA_ADMIN_TOKEN: ci-local-admin-only
         run: |
           docker compose up -d --build --wait --wait-timeout 120
           test "$(docker compose exec -T api id -u)" = "10001"
           curl --fail http://127.0.0.1:8000/health
       - if: always()
+        env:
+          VULNARENA_ADMIN_TOKEN: ci-local-admin-only
         run: docker compose down
       - uses: actions/upload-artifact@v4
         if: always()

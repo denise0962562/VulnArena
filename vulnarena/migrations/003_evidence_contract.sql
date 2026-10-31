@@ -1,0 +1,1 @@
+ALTER TABLE IF EXISTS ai_indexed_records ADD COLUMN IF NOT EXISTS source_version VARCHAR(64) NOT NULL DEFAULT 'legacy'

@@ -104,12 +104,13 @@ def _rounds_markdown(results: list[RoundResult], category: str) -> str:
     lines = [
         f"# 自博弈 · {category}",
         "",
-        "| 轮次 | 语料 | 红队新增 | 蓝队规则 | 召回 | 误杀 | 判定 |",
-        "|---|---|---|---|---|---|---|",
+        "| 轮次 | 唯一语料 | 候选变体 | 唯一新增 | 蓝队规则 | 召回 | 误杀 | 判定 |",
+        "|---|---|---|---|---|---|---|---|",
     ]
     for item in results:
         lines.append(
-            f"| {item.round_no} | {item.corpus_attacks} | {item.red_added} | "
+            f"| {item.round_no} | {item.corpus_attacks} | {item.red_candidates} | "
+            f"{item.red_added} | "
             f"{item.rule_name} | {item.recall:.0%} | {item.false_positive:.1%} | "
             f"{'OK' if item.passed else 'REJECT'} |"
         )
@@ -128,7 +129,7 @@ def _cmd_selfplay(args: argparse.Namespace) -> int:
     corpus = load_corpus(args.corpus)
 
     async def play():
-        from vulnarena.bench.mutate import mutate
+        from vulnarena.bench.mutate import limited_variants
 
         client = None
         if args.llm:
@@ -143,15 +144,7 @@ def _cmd_selfplay(args: argparse.Namespace) -> int:
             return await generate_rule(client, args.category, current)
 
         def red(current, category):
-            known = set(current.attacks.get(category, []))
-            fresh: list[str] = []
-            for sample in current.attacks.get(category, []):
-                for variant in mutate(sample):
-                    if variant not in known and variant not in fresh:
-                        fresh.append(variant)
-                if len(fresh) >= args.red_limit:
-                    return fresh
-            return fresh
+            return limited_variants(current, category, args.red_limit)
 
         try:
             return await run_selfplay(

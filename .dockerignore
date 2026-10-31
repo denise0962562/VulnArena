@@ -1,6 +1,11 @@
 *
 !pyproject.toml
 !requirements.lock
+!requirements-ai.lock
+!scripts/
+!scripts/setup_ai_runtime.py
+!scripts/setup_ai_embedding.py
+!scripts/verify_ai_runtime.py
 !README.md
 !vulnarena/
 !vulnarena/**

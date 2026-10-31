@@ -52,9 +52,7 @@ class Corpus:
             return result
 
         return Corpus(
-            attacks={
-                str(category): unique(samples) for category, samples in self.attacks.items()
-            },
+            attacks={str(category): unique(samples) for category, samples in self.attacks.items()},
             benign=unique(self.benign),
         )
 

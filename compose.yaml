@@ -7,6 +7,7 @@ services:
       VULNARENA_DATABASE_URL: postgresql+asyncpg://vulnarena:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/vulnarena
       VULNARENA_REDIS_URL: redis://redis:6379/0
       VULNARENA_NVD_API_KEY: ${VULNARENA_NVD_API_KEY:-}
+      VULNARENA_ADMIN_TOKEN: ${VULNARENA_ADMIN_TOKEN:?Set VULNARENA_ADMIN_TOKEN in .env for container access}
     depends_on:
       postgres:
         condition: service_healthy

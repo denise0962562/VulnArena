@@ -84,3 +84,16 @@ def mutate_all(attacks: dict[str, list[str]]) -> dict[str, list[str]]:
         if fresh:
             added[category] = fresh
     return added
+
+
+def limited_variants(corpus, category: str, limit: int = 20) -> list[str]:
+    """Shared CLI/API candidate policy. Unique normalized additions are counted later."""
+    known = set(corpus.attacks.get(category, []))
+    fresh = []
+    for sample in corpus.attacks.get(category, []):
+        for candidate in mutate(sample):
+            if candidate not in known and candidate not in fresh:
+                fresh.append(candidate)
+            if len(fresh) >= limit:
+                return fresh[:limit]
+    return fresh

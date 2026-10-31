@@ -1,0 +1,16 @@
+name: Optional Linux CPU runtime smoke
+on: workflow_dispatch
+permissions:
+  contents: read
+jobs:
+  cpu-runtime:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build --target ai -t vulnarena-ai:smoke .
+      - run: |
+          mkdir -p verification/ai-models
+          chmod 777 verification/ai-models
+          docker run --rm --cpus=2 --memory=1g -v "$PWD/verification/ai-models:/app/data/models" vulnarena-ai:smoke python scripts/setup_ai_embedding.py
+          docker run --rm --cpus=2 --memory=1g -v "$PWD/verification/ai-models:/app/data/models:ro" vulnarena-ai:smoke python scripts/verify_ai_runtime.py

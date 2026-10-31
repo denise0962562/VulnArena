@@ -640,7 +640,7 @@ class StudyCollector:
         return content
 
 
-def study_bundle(record: Vulnerability, study: dict) -> bytes:
+def study_bundle(record: Vulnerability, study: dict, *, ai_card: dict | None = None) -> bytes:
     """Portable UTF-8 bundle; fixed filenames never depend on upstream titles or paths."""
     output = io.BytesIO()
     study = {**study, "stale": not study_matches(record, study)}
@@ -661,6 +661,13 @@ def study_bundle(record: Vulnerability, study: dict) -> bytes:
             "机器翻译仅作学习辅助；版本范围与修复信息以原文为准。\n"
         )
         archive.writestr("README.md", overview)
+        if ai_card:
+            from vulnarena.intelligence.exports import card_markdown
+
+            archive.writestr(
+                "ai-study-card.json", json.dumps(ai_card, ensure_ascii=False, indent=2)
+            )
+            archive.writestr("ai-study-card.md", card_markdown(ai_card))
         if study["stale"]:
             archive.writestr(
                 "SOURCE-UPDATED.txt", "原始记录已更新，请核对各篇公告的采集时间与版本信息。"

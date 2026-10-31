@@ -12,6 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from redis.asyncio import Redis
 
 from vulnarena.arena.corpus import Category
+from vulnarena.arena.safe_regex import BoundedPattern
 
 POLICY_KEY = "vulnarena:arena:policy:"
 POLICY_TTL = 3600
@@ -46,14 +47,14 @@ class CompiledRule(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     rule: WafRule
-    pattern: re.Pattern[str]
+    pattern: BoundedPattern
 
 
 def compile_rules(policy: WafPolicy) -> list[CompiledRule]:
     compiled: list[CompiledRule] = []
     for rule in policy.blocked_patterns:
         try:
-            compiled.append(CompiledRule(rule=rule, pattern=re.compile(rule.regex)))
+            compiled.append(CompiledRule(rule=rule, pattern=BoundedPattern(rule.regex)))
         except re.error:
             continue  # a bad rule is skipped, never fatal
     return compiled

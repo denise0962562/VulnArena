@@ -1,6 +1,6 @@
 """P4：红队变形造样本 → 语料变强 → 蓝队召回下降。"""
 
-from vulnarena.bench.corpus import load_corpus
+from vulnarena.bench.corpus import load_corpus, normalise
 from vulnarena.bench.mutate import mutate, mutate_all
 from vulnarena.bench.selfplay import run_selfplay
 
@@ -37,7 +37,9 @@ async def test_selfplay_grows_the_corpus_and_dents_recall():
     assert [item.round_no for item in rounds] == [1, 2]
     assert rounds[0].recall < 1.0, "红队第一轮就该把规则打出缺口"
     assert rounds[1].corpus_attacks >= rounds[0].corpus_attacks
-    assert rounds[0].new_samples == [BYPASS]
+    assert rounds[0].new_samples == [normalise(BYPASS)]
+    assert rounds[0].red_added == 1
+    assert rounds[1].red_added == 0
 
 
 async def test_selfplay_without_red_keeps_recall_at_one():

@@ -9,11 +9,11 @@
 
 **中文（≤350 字，可直接粘贴）**
 
-> 一个可自建、可复现的 AI 攻防靶场：内置一套企业级采购审批系统作为靶标，红队自动渗透、蓝队自动修复，全程可观测、可复盘、可跟练。规则上线前必须通过「召回 100% + 误杀 0%」的确定性闸门。
+> 一个可自建、可复现的 AI 攻防靶场：内置一套企业采购审批教学系统作为靶标，红队从固定动作目录选择步骤，蓝队提议规则或切换预置安全实现，支持观测、复盘和跟练。规则须通过当前语料的确定性闸门，指标不代表真实流量保证。
 
 **English（如果想用英文 About）**
 
-> A self-hostable AI red/blue arena: a realistic procurement backend as the target, an automated attacker and defender, and a deterministic gate that every generated WAF rule must pass before going live.
+> A self-hostable AI red/blue arena: a realistic procurement backend as the target, catalog-constrained attack steps, proposed defense rules, and a deterministic gate on a bounded regression corpus.
 
 ---
 
@@ -34,7 +34,7 @@ vulnerability  ethical-hacking  labs  pytest  asyncio
 ```markdown
 # VulnArena
 
-> 一个能「打」也能「学」的 AI 攻防靶场：企业级业务系统 + 自动红队 + 自动蓝队 +
+> 一个能「打」也能「学」的 AI 攻防靶场：企业业务教学场景 + 自动红队 + 自动蓝队 +
 > 规则闸门 + 跟练与复盘。
 
 **它解决什么问题**：大多数靶场是「一堆预设漏洞」，打完不知道自己在干什么；
@@ -99,3 +99,6 @@ SSRF 只打进程内虚拟网络，不连接任何外部目标，也不需要授
 - `.env` 与 `.tools/`、`data/`、`verification/` 已在 `.gitignore`
 - **DeepSeek Key 只在本地 `.env`，绝不提交**
 - CI 里没有 Key，走确定性降级路径，测试照样全绿
+
+
+实际范围：NVD 双语资料与可溯源 AI 助手为情报模块，演练是共享内存教学沙盒。模型不自由修改部署任意源码，报告持久化不代表沙盒现场持久化。当前版本和验证结果以 `REPAIR_REPORT.md` 为准。

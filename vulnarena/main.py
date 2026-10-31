@@ -1,3 +1,5 @@
+import asyncio
+import hashlib
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -65,6 +67,7 @@ from vulnarena.schemas import (
     VulnerabilityView,
     utcnow,
 )
+from vulnarena.security import AdminAccessMiddleware
 from vulnarena.service import SyncService, cached_list
 from vulnarena.state import TaskBusy, TaskStore
 from vulnarena.study import cpe_products, study_bundle, weakness_ids
@@ -108,14 +111,28 @@ def create_app(
             )
         )
         nvd_client = nvd if nvd is not None else NVDClient(settings)
+        instance_connection = None
+        owns_instance = False
         try:
             await db.initialize()
+            instance_connection = await db.engine.connect()
+            lock_key = int.from_bytes(
+                hashlib.sha256((settings.database_schema or "vulnarena-app").encode()).digest()[:7],
+                "big",
+            )
+            owns_instance = await instance_connection.scalar(
+                text("SELECT pg_try_advisory_lock(:key)"), {"key": lock_key}
+            )
+            if not owns_instance:
+                raise RuntimeError("Another application instance is active. Use --workers 1.")
+            app.state.selfplay = await app.state.sessions.attach(db)
             # Redis is required for tasks; reads can fall back to PostgreSQL.
             store = TaskStore(redis_client, settings)
             app.state.db, app.state.store = db, store
             app.state.sync = SyncService(db, store, nvd_client, settings)
             app.state.descriptions = DescriptionTranslator(db, settings.translation_model)
             app.state.intelligence = IntelligenceService(db, settings)
+            app.state.intelligence.build_id = app.state.build_id
             await app.state.intelligence.startup()
             # The arena shares Redis with tasks but never with the task lease keys.
             runtime.policy_store = RedisPolicyStore(redis_client)
@@ -139,16 +156,53 @@ def create_app(
                 await app.state.descriptions.close()
             if hasattr(app.state, "intelligence"):
                 await app.state.intelligence.close()
+            if instance_connection is not None:
+                if owns_instance:
+                    await instance_connection.execute(
+                        text("SELECT pg_advisory_unlock(:key)"), {"key": lock_key}
+                    )
+                await instance_connection.close()
             await redis_client.aclose()
             await db.aclose()
 
     app = FastAPI(title="VulnArena", version="0.1.0", lifespan=lifespan)
+    app.add_middleware(AdminAccessMiddleware, settings=settings)
     app.include_router(intelligence_router)
     app.state.runtime = runtime
     app.state.portal_state = portal_state
     app.state.sessions = SessionRegistry()
     app.state.targets = TargetRegistry()
     app.state.llm = llm
+    app.state.arena_busy = False
+    app.state.sandbox_lock = asyncio.Lock()
+    app.state.selfplay_lock = asyncio.Lock()
+    build_paths = sorted(
+        path
+        for path in Path(__file__).parent.rglob("*")
+        if path.is_file() and path.suffix in {".py", ".sql", ".json", ".html"}
+    )
+    if (WEB_DIR / "index.html").is_file():
+        build_paths.append(WEB_DIR / "index.html")
+    app.state.build_id = hashlib.sha256(
+        b"".join(path.read_bytes() for path in build_paths)
+    ).hexdigest()[:12]
+
+    @app.get("/api/system/status")
+    async def system_status() -> dict:
+        samples = list(getattr(app.state, "request_samples", []))
+        durations = sorted(sample["ms"] for sample in samples)
+        return {
+            "build_id": app.state.build_id,
+            "authentication": "admin_session"
+            if settings.admin_token.get_secret_value()
+            else "local_only",
+            "arena_busy": app.state.arena_busy,
+            "arena_persistence": app.state.sessions.db is not None,
+            "request_window": len(samples),
+            "p50_ms": durations[int((len(durations) - 1) * 0.50)] if durations else None,
+            "p95_ms": durations[int((len(durations) - 1) * 0.95)] if durations else None,
+            "errors": sum(sample["status"] >= 500 for sample in samples),
+        }
 
     @app.exception_handler(RedisError)
     async def redis_unavailable(request, exc) -> JSONResponse:
@@ -306,8 +360,8 @@ def create_app(
             },
         )
 
-    async def run_session(session_id: str, level_id: str = "", defects=None) -> None:
-        """Drive one drill. TODO(phase 2): move behind /api/red with an admin token."""
+    async def execute_session(session_id: str, level_id: str, defects, session_llm) -> None:
+        """Drive one bounded, isolated-in-time sandbox drill."""
         if app.state.portal_state is None:
             await app.state.runtime.emit(
                 ArenaEvent(
@@ -321,7 +375,10 @@ def create_app(
         transport = httpx.ASGITransport(app=app)
         try:
             async with httpx.AsyncClient(
-                transport=transport, base_url="http://arena.local", timeout=30
+                transport=transport,
+                base_url="http://127.0.0.1",
+                timeout=30,
+                headers={"x-vulnarena-admin": settings.admin_token.get_secret_value()},
             ) as client:
                 ctx = ArenaContext(
                     client=client,
@@ -329,7 +386,7 @@ def create_app(
                     runtime=app.state.runtime,
                     session_id=session_id,
                     base="/api/procure",
-                    llm=llm,
+                    llm=session_llm,
                 )
                 session = (
                     await run_pipeline(ctx, defects=defects) if defects else await run_pipeline(ctx)
@@ -352,8 +409,50 @@ def create_app(
             return
         app.state.sessions.put(session)
 
+    async def run_session(
+        session_id: str, level_id: str = "", defects=None, use_model=True
+    ) -> None:
+        session_settings = (
+            settings
+            if use_model
+            else settings.model_copy(
+                update={"deepseek_api_key": type(settings.deepseek_api_key)("")}
+            )
+        )
+        session_llm = DeepSeekClient(session_settings)
+        try:
+            async with app.state.sandbox_lock:
+                async with asyncio.timeout(settings.arena_timeout):
+                    await execute_session(session_id, level_id, defects, session_llm)
+        except (TimeoutError, asyncio.CancelledError):
+            session = app.state.sessions.get(session_id)
+            if session:
+                session.status = ArenaStatus.INTERRUPTED
+                session.fallback_reason = "演练超时或服务停止，已保存报告。"
+        finally:
+            try:
+                session = app.state.sessions.get(session_id)
+                if session:
+                    session.finished_at = session.finished_at or utcnow()
+                    session.model_calls = session_llm.calls
+                    session.fallback_reason = session.fallback_reason or session_llm.last_failure
+                    if not session_llm.available:
+                        session.fallback_reason = (
+                            "model_not_configured" if use_model else "deterministic_selected"
+                        )
+                    await app.state.sessions.save(session)
+            finally:
+                await session_llm.aclose()
+                app.state.arena_busy = False
+
     @app.post("/api/arena/start", status_code=202)
-    async def arena_start(background: BackgroundTasks, level: str | None = None) -> dict[str, str]:
+    async def arena_start(
+        background: BackgroundTasks,
+        level: str | None = None,
+        mode: Literal["auto", "deterministic"] = "auto",
+    ) -> dict[str, str]:
+        if app.state.arena_busy or app.state.sandbox_lock.locked():
+            raise HTTPException(409, "已有演练或沙盒恢复操作正在运行，请等待完成。")
         defects = None
         level_id = ""
         if level:
@@ -372,7 +471,13 @@ def create_app(
         placeholder = ArenaSession(session_id=session_id, status=ArenaStatus.CREATED)
         placeholder.level_id = level_id
         app.state.sessions.put(placeholder)
-        background.add_task(run_session, session_id, level_id, defects)
+        app.state.arena_busy = True
+        try:
+            await app.state.sessions.save(placeholder)
+        except Exception:
+            app.state.arena_busy = False
+            raise
+        background.add_task(run_session, session_id, level_id, defects, mode == "auto")
         return {"session_id": session_id, "level": level_id}
 
     @app.post("/api/arena/sessions/{session_id}/hint")
@@ -381,6 +486,7 @@ def create_app(
         if session is None:
             raise HTTPException(404, "session not found")
         session.hint_uses += 1
+        await app.state.sessions.save(session)
         return {"hint_uses": session.hint_uses}
 
     @app.get("/api/arena/sessions")
@@ -388,27 +494,35 @@ def create_app(
         return app.state.sessions.recent()
 
     @app.post("/api/bench/selfplay")
-    async def bench_selfplay(rounds: int = 3, category: str = "sqli", red_limit: int = 20) -> dict:
+    async def bench_selfplay(
+        rounds: int = 3,
+        category: str = "sqli",
+        red_limit: Annotated[int, Query(ge=1, le=100)] = 20,
+    ) -> dict:
         """跑一轮离线自博弈（确定性红队，不需要模型）。"""
-        from vulnarena.bench.mutate import mutate
+        from vulnarena.bench.mutate import limited_variants
 
         def red(current, target):
-            known = set(current.attacks.get(target, []))
-            fresh: list[str] = []
-            for sample in current.attacks.get(target, []):
-                for variant in mutate(sample):
-                    if variant not in known and variant not in fresh:
-                        fresh.append(variant)
-                if len(fresh) >= red_limit:
-                    return fresh
-            return fresh
+            return limited_variants(current, target, red_limit)
 
-        results = await run_selfplay(
-            load_corpus(), rounds=max(1, min(rounds, 10)), category=category, red=red
-        )
-        payload = [item.to_dict() for item in results]
-        app.state.selfplay = {"category": category, "rounds": payload}
-        return app.state.selfplay
+        async with app.state.selfplay_lock:
+            results = await run_selfplay(
+                load_corpus(), rounds=max(1, min(rounds, 10)), category=category, red=red
+            )
+            payload = [item.to_dict() for item in results]
+            report = {
+                "category": category,
+                "rounds": payload,
+                "metrics_version": "unique-normalised-v2",
+                "build_id": app.state.build_id,
+                "created_at": utcnow().isoformat(),
+            }
+            if app.state.sessions.db is not None:
+                from vulnarena.arena.persistence import save_report
+
+                await save_report(app.state.sessions.db, "selfplay:latest", report)
+            app.state.selfplay = report
+            return report
 
     @app.get("/api/bench/selfplay")
     async def bench_selfplay_latest() -> dict:
@@ -445,8 +559,15 @@ def create_app(
             raise HTTPException(404, "session not found")
         if app.state.portal_state is None:
             raise HTTPException(503, "portal sandbox is not mounted")
+        if app.state.arena_busy or app.state.sandbox_lock.locked():
+            raise HTTPException(409, "沙盒正在运行，请等待完成。")
         try:
-            return await restore_vulnerable(app.state.portal_state, app.state.runtime, session)
+            async with app.state.sandbox_lock:
+                result = await restore_vulnerable(
+                    app.state.portal_state, app.state.runtime, session
+                )
+                await app.state.sessions.save(result)
+                return result
         except ValueError as exc:
             raise HTTPException(409, str(exc)) from exc
 
@@ -457,8 +578,13 @@ def create_app(
             raise HTTPException(404, "session not found")
         if app.state.portal_state is None:
             raise HTTPException(503, "portal sandbox is not mounted")
+        if app.state.arena_busy or app.state.sandbox_lock.locked():
+            raise HTTPException(409, "沙盒正在运行，请等待完成。")
         try:
-            return await apply_patch(app.state.portal_state, app.state.runtime, session)
+            async with app.state.sandbox_lock:
+                result = await apply_patch(app.state.portal_state, app.state.runtime, session)
+                await app.state.sessions.save(result)
+                return result
         except ValueError as exc:
             raise HTTPException(409, str(exc)) from exc
 

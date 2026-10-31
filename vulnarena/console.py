@@ -5,6 +5,12 @@
 """
 
 import html
+from pathlib import Path
+from string import Template
+
+LAB_TEMPLATE = Template(
+    Path(__file__).with_name("templates").joinpath("lab.html").read_text(encoding="utf-8")
+)
 
 STYLE = """
 :root{--bg:#0d1117;--panel:#151b24;--line:#232c3a;--text:#c9d4e5;--muted:#7c8aa5;
@@ -50,7 +56,7 @@ def selfplay_result(payload: dict) -> tuple[str, str]:
     """Render stored numeric results as HTML/SVG without browser scripting."""
     rows = payload.get("rounds", [])
     if not rows:
-        return '<tr><td colspan="6" class="muted">还没跑过</td></tr>', ""
+        return '<tr><td colspan="7" class="muted">还没跑过</td></tr>', ""
     table = []
     points = []
     marks = []
@@ -68,6 +74,7 @@ def selfplay_result(payload: dict) -> tuple[str, str]:
         )
         table.append(
             f"<tr><td>{esc(row['round_no'])}</td><td>{esc(row['corpus_attacks'])}</td>"
+            f"<td>{esc(row.get('red_candidates', '—'))}</td>"
             f"<td>+{esc(row['red_added'])}</td><td>{recall:.0%}</td>"
             f"<td>{float(row['false_positive']):.1%}</td>"
             f'<td><span class="tag {"ok" if passed else "bad"}">'
@@ -143,6 +150,8 @@ def render(
             f"<td><code>{esc(s.get('session_id'))}</code></td>"
             f"<td><span class='tag {'ok' if s.get('status') == 'VERIFIED' else 'bad'}'>"
             f"{esc(s.get('status'))}</span></td>"
+            f"<td>{esc(s.get('agent_mode', 'deterministic'))} · {esc(s.get('model_calls', 0))} 次调用"
+            f"<br><span class='muted'>{esc(s.get('fallback_reason', ''))}</span></td>"
             f"<td>{esc(', '.join(s.get('defects') or []) or '—')}</td>"
             f"<td class='muted'>{esc((s.get('started_at') or '')[:19].replace('T', ' '))}</td>"
             "</tr>"
@@ -150,85 +159,27 @@ def render(
         )
     else:
         session_rows = (
-            "<tr><td colspan='4' class='muted'>还没有演练记录，点上面的按钮跑一场。</td></tr>"
+            "<tr><td colspan='5' class='muted'>还没有演练记录，点上面的按钮跑一场。</td></tr>"
         )
 
-    return f"""<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">
-<title>靶场管理 · VulnArena</title><style>{STYLE}</style></head><body>
-<header><div class="brand">Vuln<span>Scope</span> · 靶场管理</div>
-<div class="row"><a class="btn" href="/">返回情报台</a></div></header>
-<main>
-  <div class="card">
-    <h1>靶场演练台</h1>
-    <p class="muted">左边是情报，这里是对抗。所有靶标都是本项目自建的内存沙盒，
-    不连接任何外部系统；演练结果可回放、可跟练。</p>
-    <div class="grid" style="margin-top:14px">
-      <div class="stat"><b>{len(enabled)}</b><span class="muted">已启用靶标</span></div>
-      <div class="stat"><b>{len(defects)}</b><span class="muted">可开关的缺陷类型</span></div>
-      <div class="stat"><b>{live}</b><span class="muted">本次进程内演练</span></div>
-      <div class="stat"><b>{verified}</b><span class="muted">其中 VERIFIED</span></div>
-      <div class="stat"><b>{solved}/{len(levels)}</b><span class="muted">关卡通过</span></div>
-      <div class="stat"><b>{total}</b><span class="muted">总分 · {esc(rank or "新人")}</span></div>
-    </div>
-    <div class="row" style="margin-top:16px">
-      <button id="start">开始一场演练</button>
-      <a class="btn" href="/arena">打开观战台</a>
-      <a class="btn" href="/api/procure/ui/login" target="_blank">打开靶场前台（采购系统）</a>
-      <span id="hint" class="muted"></span>
-    </div>
-  </div>
-
-  <div class="card">
-    <h3>自博弈曲线（红队造变体 → 蓝队召回下降）</h3>
-    <form class="row" method="post" action="/lab/selfplay">
-      <button id="play" type="submit">跑一轮（3 回合）</button>
-      <span id="play-hint" class="muted">{esc(play_hint)}</span>
-    </form>
-    {play_error}
-    <svg id="curve" role="img" aria-label="各回合召回率曲线" viewBox="0 0 640 200"
-      style="width:100%;height:200px;margin-top:12px">{curve}</svg>
-    <table><thead><tr><th>轮次</th><th>语料</th><th>红队新增</th><th>召回</th><th>误杀</th><th>判定</th></tr></thead>
-    <tbody id="rounds">{rounds_rows}</tbody></table>
-  </div>
-
-  <div class="card">
-    <h3>关卡（由浅入深，通过后解锁下一层）</h3>
-    <table><thead><tr><th>层</th><th>关卡</th><th>目标</th><th>考什么</th><th>难度</th>
-    <th>分值</th><th>得分</th><th>状态</th></tr></thead><tbody>{level_rows}</tbody></table>
-    <p class="muted" style="margin-top:10px">判定看攻击的副作用（canary / 数据库状态），不看提交的 flag；
-    用提示会扣分（每用一次七折，最低四成）。</p>
-  </div>
-
-  <div class="card">
-    <h3>靶标清单</h3>
-    <table><thead><tr><th>ID</th><th>语言</th><th>业务场景</th><th>状态</th><th>挂载路径</th></tr></thead>
-    <tbody>{target_rows}</tbody></table>
-    <p class="muted" style="margin-top:10px">新增一门语言 = 加一条 manifest + 一个小服务，
-    不改动已有靶标（见 docs/SYSTEM-DESIGN.md）。</p>
-  </div>
-
-  <div class="card">
-    <h3>最近演练</h3>
-    <table><thead><tr><th>会话</th><th>状态</th><th>开启的缺陷</th><th>开始时间</th></tr></thead>
-    <tbody>{session_rows}</tbody></table>
-  </div>
-</main>
-<script>
-document.getElementById('start').addEventListener('click', async (event) => {{
-  const button = event.target; button.disabled = true;
-  const hint = document.getElementById('hint');
-  hint.textContent = '正在创建演练…';
-  try {{
-    const response = await fetch('/api/arena/start', {{ method: 'POST' }});
-    if (!response.ok) throw new Error('HTTP ' + response.status);
-    const body = await response.json();
-    hint.textContent = '已创建 ' + body.session_id + '，正在跳转观战台…';
-    setTimeout(() => {{ window.location.href = '/arena?session=' + body.session_id; }}, 600);
-  }} catch (error) {{
-    hint.textContent = '启动失败：' + error.message;
-    button.disabled = false;
-  }}
-}});
-
-</script>
-</body></html>"""
+    return LAB_TEMPLATE.substitute(
+        style=STYLE,
+        enabled_count=len(enabled),
+        defect_count=len(defects),
+        session_count=live,
+        verified_count=verified,
+        solved_count=solved,
+        level_count=len(levels),
+        score=total,
+        rank=esc(rank or "新人"),
+        play_hint=esc(play_hint),
+        play_error=play_error,
+        metrics_version=esc(selfplay.get("metrics_version", "尚未运行")),
+        build_id=esc(selfplay.get("build_id", "—")),
+        created_at=esc(selfplay.get("created_at", "—")),
+        curve=curve,
+        rounds_rows=rounds_rows,
+        level_rows=level_rows,
+        target_rows=target_rows,
+        session_rows=session_rows,
+    )

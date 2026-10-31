@@ -2,24 +2,20 @@
 
 用法：
     python scripts/plot_selfplay.py --json reports/selfplay.json --out docs/figures/selfplay.svg
-不给 --json 时用内置的实测数据（对应 README 里的那一轮）。
+不给 --json 时现场运行三回合确定性基线；不读取写死的数字。
 """
 
 import argparse
+import asyncio
+import html
 import json
 from pathlib import Path
-
-DEFAULT_ROUNDS = [
-    {"round_no": 1, "corpus_attacks": 14, "recall": 0.8571, "false_positive": 0.0},
-    {"round_no": 2, "corpus_attacks": 20, "recall": 0.8500, "false_positive": 0.0},
-    {"round_no": 3, "corpus_attacks": 22, "recall": 0.8182, "false_positive": 0.0},
-]
 
 WIDTH, HEIGHT = 720, 320
 PAD_L, PAD_R, PAD_T, PAD_B = 64, 24, 28, 48
 
 
-def render(rounds: list[dict], *, title: str = "自博弈：红队每轮造变体，蓝队召回下降") -> str:
+def render(rounds: list[dict], *, title: str = "自博弈：固定规则与唯一语料召回率") -> str:
     plot_w = WIDTH - PAD_L - PAD_R
     plot_h = HEIGHT - PAD_T - PAD_B
     count = len(rounds)
@@ -34,7 +30,7 @@ def render(rounds: list[dict], *, title: str = "自博弈：红队每轮造变�
         f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {WIDTH} {HEIGHT}" '
         f'font-family="Segoe UI, Microsoft YaHei, sans-serif">',
         f'<rect width="{WIDTH}" height="{HEIGHT}" fill="#0d1117"/>',
-        f'<text x="{PAD_L}" y="20" fill="#c9d4e5" font-size="13">{title}</text>',
+        f'<text x="{PAD_L}" y="20" fill="#c9d4e5" font-size="13">{html.escape(title)}</text>',
     ]
 
     # 网格 + y 轴刻度（0/25/50/75/100%）
@@ -51,9 +47,7 @@ def render(rounds: list[dict], *, title: str = "自博弈：红队每轮造变�
         )
 
     points = " ".join(f"{x_at(i):.1f},{y_at(row['recall']):.1f}" for i, row in enumerate(rounds))
-    parts.append(
-        f'<polyline points="{points}" fill="none" stroke="#4f8cff" stroke-width="2.5"/>'
-    )
+    parts.append(f'<polyline points="{points}" fill="none" stroke="#4f8cff" stroke-width="2.5"/>')
 
     for index, row in enumerate(rounds):
         x, y = x_at(index), y_at(row["recall"])
@@ -86,7 +80,20 @@ def main() -> None:
         payload = json.loads(args.json.read_text(encoding="utf-8"))
         rounds = payload.get("rounds", payload) if isinstance(payload, dict) else payload
     else:
-        rounds = DEFAULT_ROUNDS
+        if args.json:
+            raise SystemExit("Specified report file does not exist.")
+        from vulnarena.bench.corpus import load_corpus
+        from vulnarena.bench.mutate import limited_variants
+        from vulnarena.bench.selfplay import run_selfplay
+
+        results = asyncio.run(
+            run_selfplay(
+                load_corpus(),
+                rounds=3,
+                red=lambda corpus, category: limited_variants(corpus, category, 20),
+            )
+        )
+        rounds = [item.to_dict() for item in results]
 
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(render(rounds), encoding="utf-8")

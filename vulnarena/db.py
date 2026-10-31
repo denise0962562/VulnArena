@@ -150,6 +150,9 @@ class Database:
                 # PostgreSQL transaction lock also serializes separate app instances.
                 await connection.exec_driver_sql("SELECT pg_advisory_xact_lock(1448438862)")
                 await connection.run_sync(Base.metadata.create_all)
+                from vulnarena.migrations import upgrade
+
+                await upgrade(connection)
                 await connection.execute(
                     insert(Revision)
                     .values(id=1, value=0, cache_epoch=str(uuid4()))
